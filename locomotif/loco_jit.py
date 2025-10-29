@@ -36,11 +36,14 @@ def max3(a, b, c):
         else:
             return c
         
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+# @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
+    # TODO only keep max value after euclid distance between max point and min point > l_min
+    min_point_to_max_point = {}
 
     for i in range(n):
 
@@ -48,15 +51,75 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
         j_end = m
 
         for j in range(j_start, j_end):
-
             sim = sm[i, j]
 
-            max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
+            pred_diag = csm[i + 1, j + 1]
+            pred_left = csm[i + 1, j]
+            pred_up = csm[i, j + 1]
+
+            pred_max = max3(pred_diag, pred_left, pred_up)
+
+            if pred_max == pred_diag:
+                pred_coord = (i+1, j+1)
+            elif pred_max == pred_left:
+                pred_coord = (i+1, j)
+            else:
+                pred_coord = (i, j+1)
 
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
+                csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
             else:
-                csm[i + 2, j + 2] = max(0, sim + max_cs)
+                csm[i + 2, j + 2] = max(0, sim + pred_max)
+
+                # we check if the previous cel has a min point and if min_point_to_max_point 
+                # has already been initialised, if not we set the current value to the min_point of
+                # our predecessor, we do this so we init only start points that have a path
+                pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
+                if pred_min[0] != -1 and pred_min[1] != -1:
+                    k = (int(pred_min[0]), int(pred_min[1]))
+                    # TODO change this to l_min
+                    dist = np.linalg.norm(np.array([i+2, j+2]) - np.array(pred_min))
+                    if k not in min_point_to_max_point and dist > 100:
+                        min_point_to_max_point[k] = (i+2, j+2)
+
+
+
+            if pred_max == 0:
+                min_point_matrix[i + 1, j + 1] = - 1
+                min_point_matrix[i + 1, j] = - 1
+                min_point_matrix[i, j + 1] = - 1
+                min_point_matrix[i+2, j+2] = (i+2, j+2)
+                # min_point_to_max_point[(i+2, j+2)] = (i+2, j+2)
+            else:
+                min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
+
+            key = tuple(min_point_matrix[i+2, j+2])
+            if key[0] != -1 and key[1] != -1:
+                max_point = min_point_to_max_point.get(key)
+                if max_point is not None:
+                    max_value = csm[max_point[0], max_point[1]]
+                    if max_value < csm[i + 2, j + 2]:
+                        min_point_to_max_point[key] = (i+2, j+2)
+
+    import matplotlib.pyplot as plt
+
+    # draw on a blank matrix with same shape (or use csm instead of bg if you want the heatmap)
+    bg = np.zeros_like(csm)
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(bg, cmap="gray", origin="upper")
+
+    for min_pt, max_pt in min_point_to_max_point.items():
+        y1, x1 = min_pt
+        y2, x2 = max_pt
+        plt.plot([x1, x2], [y1, y2], linewidth=1)  # color cycles by default
+
+    plt.title("Lines from min→max mapping")
+    plt.xlim(-0.5, bg.shape[1]-0.5)
+    plt.ylim(bg.shape[0]-0.5, -0.5)  # keep origin='upper'
+    plt.tight_layout()
+    plt.show()
+    
     return csm
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
