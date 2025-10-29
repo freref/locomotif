@@ -36,12 +36,16 @@ def max3(a, b, c):
         else:
             return c
         
+def _is_neg1(x):
+    return np.all(np.asarray(x) == -1)
+        
 # @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
+    test_min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
     # TODO only keep max value after euclid distance between max point and min point > l_min
     min_point_to_max_point = {}
 
@@ -65,33 +69,49 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
                 pred_coord = (i+1, j)
             else:
                 pred_coord = (i, j+1)
-
+            
             if sim < tau:
                 csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
             else:
                 csm[i + 2, j + 2] = max(0, sim + pred_max)
 
-                # we check if the previous cel has a min point and if min_point_to_max_point 
-                # has already been initialised, if not we set the current value to the min_point of
-                # our predecessor, we do this so we init only start points that have a path
-                pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
-                if pred_min[0] != -1 and pred_min[1] != -1:
-                    k = (int(pred_min[0]), int(pred_min[1]))
-                    # TODO change this to l_min
+            # we check if the previous cel has a min point and if min_point_to_max_point 
+            # has already been initialised, if not we set the current value to the min_point of
+            # our predecessor, we do this so we init only start points that have a path
+            pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
+            if pred_min[0] != -1 and pred_min[1] != -1:
+                k = (int(pred_min[0]), int(pred_min[1]))
+                if k not in min_point_to_max_point:
+                    # TODO change this to l_min and find a cheaper heuristic
                     dist = np.linalg.norm(np.array([i+2, j+2]) - np.array(pred_min))
-                    if k not in min_point_to_max_point and dist > 100:
+                    if dist > 100:
                         min_point_to_max_point[k] = (i+2, j+2)
 
+            """
+            if pred_max > 0:
+                pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
 
-
-            if pred_max == 0:
-                min_point_matrix[i + 1, j + 1] = - 1
-                min_point_matrix[i + 1, j] = - 1
-                min_point_matrix[i, j + 1] = - 1
+                if pred_min[0] != -1 and pred_min[1] != -1:
+                    min_point_matrix[i+2, j+2] = pred_min
+                else:
+                    # this is the seed, everything grows from here
+                    min_point_matrix[pred_coord[0], pred_coord[1]] = (pred_coord[0], pred_coord[1])
+                    test_min_point_matrix[pred_coord[0], pred_coord[1]] = (pred_coord[0], pred_coord[1])
+                    min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
+            """
+            
+            if pred_max == 0 and csm[i + 2, j + 2] > 0:
+                # self_min = min_point_matrix[i+2, j+2]
+                # if self_min[0] == -1 and self_min[1] == -1:
                 min_point_matrix[i+2, j+2] = (i+2, j+2)
+                test_min_point_matrix[i+2, j+2] = (i+2, j+2)
+                # this is where we set the seed min point
+                # after we set this we could set the successors (so right, down and diag) to same min point
+                # this is basically masking
+
                 # min_point_to_max_point[(i+2, j+2)] = (i+2, j+2)
-            else:
-                min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
+            elif pred_max > 0:
+                 min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
 
             key = tuple(min_point_matrix[i+2, j+2])
             if key[0] != -1 and key[1] != -1:
@@ -102,8 +122,22 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
                         min_point_to_max_point[key] = (i+2, j+2)
 
     import matplotlib.pyplot as plt
+    
+    """
+    # plot csm
+    plt.figure(figsize=(8, 6))
+    plt.imshow(csm, cmap="viridis", aspect="auto", origin="lower")
+    plt.colorbar(label="Cumulative similarity")
+    plt.title("Cumulative Similarity Matrix (CSM)")
+    plt.xlabel("j index")
+    plt.ylabel("i index")
+    plt.xlim(-0.5, csm.shape[1]-0.5)
+    plt.ylim(csm.shape[0]-0.5, -0.5)
+    plt.show()
+    """
 
-    # draw on a blank matrix with same shape (or use csm instead of bg if you want the heatmap)
+    # show straight line paths
+
     bg = np.zeros_like(csm)
 
     plt.figure(figsize=(6, 6))
@@ -119,6 +153,22 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
     plt.ylim(bg.shape[0]-0.5, -0.5)  # keep origin='upper'
     plt.tight_layout()
     plt.show()
+
+    """
+    # show starting points
+
+    mask = np.any(test_min_point_matrix != -1, axis=2)
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(mask, cmap="Reds", origin="upper", interpolation="nearest")
+
+    plt.title("Min points")
+    plt.gca().set_facecolor("white")
+    plt.xlim(-0.5, csm.shape[1]-0.5)
+    plt.ylim(csm.shape[0]-0.5, -0.5)
+    plt.tight_layout()
+    plt.show()
+    """
     
     return csm
 
