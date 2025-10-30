@@ -50,10 +50,10 @@ class LoCo:
         self._sm  = similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
         return self._sm
           
-    def calculate_cumulative_similarity_matrix(self):
+    def calculate_cumulative_similarity_matrix(self, l_min=None):
         if self._sm is None:
             self.calculate_similarity_matrix()            
-        self._csm, self._min_point_to_max_point = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
+        self._csm, self._min_point_to_max_point = cumulative_similarity_matrix(self._sm, tau=self.tau, l_min=l_min, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
         return self._csm
 
     def find_best_paths(self, l_min=None, vwidth=None):
@@ -63,7 +63,7 @@ class LoCo:
             vwidth = l_min // 2
 
         if self._csm is None:
-            self.calculate_cumulative_similarity_matrix()
+            self.calculate_cumulative_similarity_matrix(l_min=l_min)
 
         # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
         mask = np.full(self._csm.shape, self._symmetric)
@@ -105,9 +105,9 @@ def estimate_tau_from_sm(sm, rho, only_triu=False):
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     return loco_jit.similarity_matrix_ndim(ts1, ts2, gamma, only_triu, diag_offset)
 
-def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, l_min=10, delta_m=0.5, warping=True, only_triu=False, diag_offset=0):
     if warping:
-        return loco_jit.cumulative_similarity_matrix_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
+        return loco_jit.cumulative_similarity_matrix_warping(sm, tau, l_min, delta_a, delta_m, only_triu, diag_offset)
     else:
         return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
 

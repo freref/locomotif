@@ -37,13 +37,11 @@ def max3(a, b, c):
             return c
         
 # @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
-def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
-
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
     distance_matrix = np.zeros((n + 2, m + 2), dtype=np.float32)
-    test_min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
     min_point_to_max_point = {}
 
     for i in range(n):
@@ -74,7 +72,6 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
 
             if pred_max == 0 and csm[i + 2, j + 2] > 0:
                 min_point_matrix[i+2, j+2] = (i+2, j+2)
-                test_min_point_matrix[i+2, j+2] = (i+2, j+2)
             elif pred_max > 0:
                  min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
                  distance_matrix[i+2, j+2] = distance_matrix[pred_coord[0], pred_coord[1]] + 1
@@ -83,7 +80,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
             if pred_min[0] != -1 and pred_min[1] != -1:
                 k = (int(pred_min[0]), int(pred_min[1]))
                 # Change distance check to l_min
-                if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > 200:
+                if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > l_min:
                     min_point_to_max_point[k] = (i+2, j+2)
 
             key = tuple(min_point_matrix[i+2, j+2])
@@ -199,7 +196,7 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
+# @njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
