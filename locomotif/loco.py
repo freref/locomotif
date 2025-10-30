@@ -55,7 +55,7 @@ class LoCo:
     def calculate_cumulative_similarity_matrix(self):
         if self._sm is None:
             self.calculate_similarity_matrix()            
-        self._csm, self._dist, self._bp = cumulative_similarity_matrix(self._sm, self.l_min, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
+        self._csm, self._dist = cumulative_similarity_matrix(self._sm, self.l_min, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
         return self._csm
 
     def find_best_paths(self, l_min=None, vwidth=None):
