@@ -36,11 +36,15 @@ def max3(a, b, c):
         else:
             return c
         
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+# @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
+    distance_matrix = np.zeros((n + 2, m + 2), dtype=np.float32)
+    test_min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
+    min_point_to_max_point = {}
 
     for i in range(n):
 
@@ -48,16 +52,49 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
         j_end = m
 
         for j in range(j_start, j_end):
-
             sim = sm[i, j]
 
-            max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
+            pred_diag = csm[i + 1, j + 1]
+            pred_left = csm[i + 1, j]
+            pred_up = csm[i, j + 1]
 
-            if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
+            pred_max = max3(pred_diag, pred_left, pred_up)
+
+            if pred_max == pred_diag:
+                pred_coord = (i+1, j+1)
+            elif pred_max == pred_left:
+                pred_coord = (i+1, j)
             else:
-                csm[i + 2, j + 2] = max(0, sim + max_cs)
-    return csm
+                pred_coord = (i, j+1)
+            
+            if sim < tau:
+                csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
+            else:
+                csm[i + 2, j + 2] = max(0, sim + pred_max)
+
+            if pred_max == 0 and csm[i + 2, j + 2] > 0:
+                min_point_matrix[i+2, j+2] = (i+2, j+2)
+                test_min_point_matrix[i+2, j+2] = (i+2, j+2)
+            elif pred_max > 0:
+                 min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
+                 distance_matrix[i+2, j+2] = distance_matrix[pred_coord[0], pred_coord[1]] + 1
+
+            pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
+            if pred_min[0] != -1 and pred_min[1] != -1:
+                k = (int(pred_min[0]), int(pred_min[1]))
+                # Change distance check to l_min
+                if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > 200:
+                    min_point_to_max_point[k] = (i+2, j+2)
+
+            key = tuple(min_point_matrix[i+2, j+2])
+            if key[0] != -1 and key[1] != -1:
+                max_point = min_point_to_max_point.get(key)
+                if max_point is not None:
+                    max_value = csm[max_point[0], max_point[1]]
+                    if max_value < csm[i + 2, j + 2]:
+                        min_point_to_max_point[key] = (i+2, j+2)
+    
+    return csm, min_point_to_max_point
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
