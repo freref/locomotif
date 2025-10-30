@@ -183,13 +183,16 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
+# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
-    # Mask all zeros
+    # Store the csm as a sparse matrix so argmax is faster
+    # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
+    # masking the sparse matrix with these forbidden indeces is complexity O(nnz)
+    # filtering these forbidden indeces is emberassingly paralizeable
+    # argmax is emberassingly paralizeable
+    # updating the distance matrix is emberassingly paralizeable
+    print(100.0 * np.count_nonzero(csm == 0) / csm.size, "%")
     mask = mask | (csm <= 0)
-    
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    # start_mask = (~mask) # & (csm >= tau * min_path_length)
     
     start_mask = (~mask) & (dist > l_min)
     pos_i, pos_j = np.nonzero(start_mask)
@@ -211,11 +214,13 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
             while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
                 k_best -= 1
                 if k_best < 0:
+                    print(100.0 * np.count_nonzero(csm[mask] == 0) / csm[mask].size, "%")
                     return paths
                 
             i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
 
             if i_best < 2 or j_best < 2:
+                print(100.0 * np.count_nonzero(csm[mask] == 0) / csm[mask].size, "%")
                 return paths
             
             if warping:
@@ -224,7 +229,6 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
                 path = best_path_no_warping(csm, mask, i_best, j_best)
                 
             mask = mask_vicinity(path, mask, 0)
-            # mask = mask_path(path, mask)
             
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
                 path_found = True
@@ -233,4 +237,5 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)
 
+    print(100.0 * np.count_nonzero(csm[mask] == 0) / csm[mask].size, "%")
     return paths
