@@ -4,7 +4,7 @@ import numpy as np
 ### JIT
 from numba import int32, float64, float32, boolean
 from numba import njit
-from numba.types import List, Array
+from numba.types import List, Array, types
 from numba import prange
 
 @njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
@@ -35,8 +35,8 @@ def max3(a, b, c):
             return b
         else:
             return c
-        
-# @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+
+@njit(float32[:, :](float32[:, :], float64, int32, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
@@ -83,15 +83,18 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
                 if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > l_min:
                     min_point_to_max_point[k] = (i+2, j+2)
 
-            key = tuple(min_point_matrix[i+2, j+2])
-            if key[0] != -1 and key[1] != -1:
-                max_point = min_point_to_max_point.get(key)
-                if max_point is not None:
-                    max_value = csm[max_point[0], max_point[1]]
-                    if max_value < csm[i + 2, j + 2]:
-                        min_point_to_max_point[key] = (i+2, j+2)
+            key_i = min_point_matrix[i + 2, j + 2, 0]
+            key_j = min_point_matrix[i + 2, j + 2, 1]
+            if key_i != -1 and key_j != -1:
+                k = (int32(key_i), int32(key_j))
+                if k in min_point_to_max_point:
+                    mp = min_point_to_max_point[k]
+                    max_value = csm[mp[0], mp[1]]
+                    cur_value = csm[i + 2, j + 2]
+                    if cur_value > max_value:
+                        min_point_to_max_point[k] = (i + 2, j + 2)
     
-    return csm, min_point_to_max_point
+    return csm #, min_point_to_max_point
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -196,7 +199,7 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-# @njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
