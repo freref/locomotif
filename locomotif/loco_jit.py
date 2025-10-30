@@ -182,6 +182,17 @@ def mask_vicinity(path, mask, vwidth=10):
     mask[ic, max(0, jc - vwidth) : min(m, jc + vwidth + 1)] = True
     return mask
 
+@njit
+def update_dist(mask, dist, csm):
+    n, m = dist.shape
+
+    for i in range(1, n):
+        for j in range(1, m):
+            if mask[i, j]:
+                dist[i, j] = 0
+            else:
+                # TODO use backpointers
+                dist[i, j] = 1 
 
 # @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
