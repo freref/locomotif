@@ -3,8 +3,9 @@ import numpy as np
 
 ### JIT
 from numba import int32, float64, float32, boolean
-from numba import njit
-from numba.types import List, Array, types
+from numba import njit, types
+from numba.typed import Dict
+from numba.types import List, Array
 from numba import prange
 
 @njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
@@ -36,13 +37,25 @@ def max3(a, b, c):
         else:
             return c
 
-@njit #(float32[:, :](float32[:, :], float64, int32, float64, float64, boolean, int32))
+KeyT = types.UniTuple(types.int64, 2)
+ValT = types.UniTuple(types.int64, 2)
+DictT = types.DictType(KeyT, ValT)
+@njit(
+    types.Tuple((types.float32[:, :], DictT))(
+        types.float32[:, :],  # sm
+        types.float64,        # tau
+        types.int32,          # l_min
+        types.float64,        # delta_a
+        types.float64,        # delta_m
+        types.boolean,        # only_triu
+        types.int32           # diag_offset
+))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
     distance_matrix = np.zeros((n + 2, m + 2), dtype=np.float32)
-    min_point_to_max_point = {}
+    min_point_to_max_point = Dict.empty(key_type=KeyT, value_type=ValT)
 
     for i in range(n):
 
