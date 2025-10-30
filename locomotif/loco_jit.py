@@ -92,7 +92,6 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
             pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
             if pred_min[0] != -1 and pred_min[1] != -1:
                 k = (int(pred_min[0]), int(pred_min[1]))
-                # Change distance check to l_min
                 if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > l_min:
                     min_point_to_max_point[k] = (i+2, j+2)
 
@@ -216,11 +215,6 @@ def mask_vicinity(path, mask, vwidth=10):
 def find_best_paths(csm, min_point_to_max_point, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
-    
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    # start_mask = (~mask) # & (csm >= tau * min_path_length)
-    
-    # pos_i, pos_j = np.nonzero(start_mask)
 
     ends = np.array(list(min_point_to_max_point.values()), dtype=np.int64)  # (p, 2)
 
@@ -258,7 +252,6 @@ def find_best_paths(csm, min_point_to_max_point, mask, tau, l_min=10, vwidth=5, 
                 path = best_path_no_warping(csm, mask, i_best, j_best)
                 
             mask = mask_vicinity(path, mask, 0)
-            # mask = mask_path(path, mask)
             
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
                 path_found = True
