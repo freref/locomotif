@@ -72,7 +72,7 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        paths = find_best_paths(self._csm, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
+        paths = find_best_paths(self._csm, self._min_point_to_max_point, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
         paths = [path-2 for path in paths]
 
         if self._symmetric:
@@ -112,8 +112,8 @@ def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, l_min=10, delta_m=0.5
     else:
         return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
 
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
-    paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping)
+def find_best_paths(csm, min_point_to_max_point, mask, tau, l_min=10, vwidth=5, warping=True):
+    paths = loco_jit.find_best_paths(csm, min_point_to_max_point, mask, tau, l_min, vwidth, warping)
     return paths
 
 def ensure_multivariate(ts):

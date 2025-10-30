@@ -212,19 +212,25 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], DictT, boolean[:, :], float32, int32, int32, boolean))
+def find_best_paths(csm, min_point_to_max_point, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
     
     # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    start_mask = (~mask) # & (csm >= tau * min_path_length)
+    # start_mask = (~mask) # & (csm >= tau * min_path_length)
     
-    pos_i, pos_j = np.nonzero(start_mask)
-    
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
+    # pos_i, pos_j = np.nonzero(start_mask)
+
+    ends = np.array(list(min_point_to_max_point.values()), dtype=np.int64)  # (p, 2)
+
+    p = ends.shape[0]
+    values = np.empty(p, dtype=csm.dtype)
+    for t in range(p):
+        values[t] = csm[ends[t, 0], ends[t, 1]]
+
     perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
+    sorted_pos_i, sorted_pos_j = ends[perm, 0], ends[perm, 1]
 
     k_best = len(sorted_pos_i) - 1
     paths = []
