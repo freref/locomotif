@@ -85,6 +85,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
 
             if pred_max == 0 and csm[i + 2, j + 2] > 0:
                 min_point_matrix[i+2, j+2] = (i+2, j+2)
+                continue
             elif pred_max > 0:
                  min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
                  distance_matrix[i+2, j+2] = distance_matrix[pred_coord[0], pred_coord[1]] + 1
