@@ -188,9 +188,8 @@ def mask_vicinity(path, mask, vwidth=10):
     mask[ic, max(0, jc - vwidth) : min(m, jc + vwidth + 1)] = True
     return mask
 
-
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
     
