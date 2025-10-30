@@ -38,7 +38,8 @@ def max3(a, b, c):
         
 def _is_neg1(x):
     return np.all(np.asarray(x) == -1)
-        
+
+# spatial hashing / grid bucketing (some kind of clustering)
 # @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
@@ -86,19 +87,6 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
                     dist = np.linalg.norm(np.array([i+2, j+2]) - np.array(pred_min))
                     if dist > 100:
                         min_point_to_max_point[k] = (i+2, j+2)
-
-            """
-            if pred_max > 0:
-                pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
-
-                if pred_min[0] != -1 and pred_min[1] != -1:
-                    min_point_matrix[i+2, j+2] = pred_min
-                else:
-                    # this is the seed, everything grows from here
-                    min_point_matrix[pred_coord[0], pred_coord[1]] = (pred_coord[0], pred_coord[1])
-                    test_min_point_matrix[pred_coord[0], pred_coord[1]] = (pred_coord[0], pred_coord[1])
-                    min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
-            """
             
             if pred_max == 0 and csm[i + 2, j + 2] > 0:
                 # self_min = min_point_matrix[i+2, j+2]
