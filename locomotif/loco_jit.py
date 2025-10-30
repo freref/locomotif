@@ -56,6 +56,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
     min_point_matrix = np.full((n + 2, m + 2, 2), -1, dtype=(np.int32))
     distance_matrix = np.zeros((n + 2, m + 2), dtype=np.float32)
     min_point_to_max_point = Dict.empty(key_type=KeyT, value_type=ValT)
+    overtake_threshold = np.full((n + 2, m + 2), -1.0, dtype=np.float32)
 
     for i in range(n):
 
@@ -83,19 +84,43 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
             else:
                 csm[i + 2, j + 2] = max(0, sim + pred_max)
 
-            if pred_max == 0 and csm[i + 2, j + 2] > 0:
-                # pure min point
+            cur = csm[i + 2, j + 2]
+            if pred_max == 0 and cur > 0:
+                # pure min point:  we start a brand new line
                 min_point_matrix[i+2, j+2] = (i+2, j+2)
                 continue
-            elif pred_max > 0:
-                 min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
-                 distance_matrix[i+2, j+2] = distance_matrix[pred_coord[0], pred_coord[1]] + 1
+            else:
+                if cur < pred_max and cur > 0:
+                    # non-pure mint point: we are on an existing line
+                    min_point_matrix[i+2, j+2] = (i+2, j+2)
+                    distance_matrix[i+2, j+2]  = 0
+                    overtake_threshold[i+2, j+2] = np.float32(pred_max)
+                elif cur > 0:
+                    # normal case: we continue the line
+                    min_point_matrix[i+2, j+2] = min_point_matrix[pred_coord[0], pred_coord[1]]
+                    distance_matrix[i+2, j+2] = distance_matrix[pred_coord[0], pred_coord[1]] + 1
+                    overtake_threshold[i+2, j+2] = overtake_threshold[pred_coord[0], pred_coord[1]]
+            
+            mpi = min_point_matrix[i+2, j+2, 0]
+            mpj = min_point_matrix[i+2, j+2, 1]
+            if mpi != -1 and mpj != -1 and cur > 0:
+                pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
+                if pred_min[0] != -1 and pred_min[1] != -1:
+                    k = (int(pred_min[0]), int(pred_min[1]))
+                    if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > l_min:
+                        min_point_to_max_point[k] = (i+2, j+2)
 
-            pred_min = min_point_matrix[pred_coord[0], pred_coord[1]]
-            if pred_min[0] != -1 and pred_min[1] != -1:
-                k = (int(pred_min[0]), int(pred_min[1]))
-                if k not in min_point_to_max_point and distance_matrix[i+2, j+2] > l_min:
-                    min_point_to_max_point[k] = (i+2, j+2)
+                thr = overtake_threshold[i+2, j+2]
+                if thr >= 0.0 and cur >= thr:
+                    k = (int32(mpi), int32(mpj))
+                    if k in min_point_to_max_point:
+                        mp = min_point_to_max_point[k]
+                        if cur > csm[mp[0], mp[1]]:
+                            min_point_to_max_point[k] = (i+2, j+2)
+                    else:
+                        if distance_matrix[i+2, j+2] > l_min:
+                            min_point_to_max_point[k] = (i+2, j+2)
+                    overtake_threshold[i+2, j+2] = -1.0
 
             key_i = min_point_matrix[i + 2, j + 2, 0]
             key_j = min_point_matrix[i + 2, j + 2, 1]
