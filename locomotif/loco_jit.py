@@ -36,7 +36,7 @@ def max3(a, b, c):
         else:
             return c
 
-@njit(float32[:, :](float32[:, :], float64, int32, float64, float64, boolean, int32))
+@njit #(float32[:, :](float32[:, :], float64, int32, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
@@ -94,7 +94,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, l_min=10, delta_a=1.0, del
                     if cur_value > max_value:
                         min_point_to_max_point[k] = (i + 2, j + 2)
     
-    return csm #, min_point_to_max_point
+    return csm , min_point_to_max_point
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
