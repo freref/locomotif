@@ -3,7 +3,7 @@ import numpy as np
 
 ### JIT
 from numba import int32, float64, float32, boolean
-from numba import njit
+from numba import njit, types
 from numba.types import List, Array
 from numba import prange
 
@@ -36,11 +36,17 @@ def max3(a, b, c):
         else:
             return c
         
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
-def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+@njit(types.Tuple((
+        types.float32[:, :], 
+        types.int32[:, :],
+        types.int32[:, :, :]
+    ))(float32[:, :], int32, float64, float64, float64, boolean, int32))
+def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
+    bp = np.full((n + 2, m + 2, 2), -1, dtype=np.int32)
 
     for i in range(n):
 
@@ -51,13 +57,34 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
 
             sim = sm[i, j]
 
-            max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
+            pred_diag = csm[i + 1, j + 1]
+            pred_left = csm[i + 1, j]
+            pred_up = csm[i, j + 1]
 
-            if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
+            pred_max = max3(pred_diag, pred_left, pred_up)
+
+            if pred_max == pred_diag:
+                pred_coord = (i+1, j+1)
+            elif pred_max == pred_left:
+                pred_coord = (i+1, j)
             else:
-                csm[i + 2, j + 2] = max(0, sim + max_cs)
-    return csm
+                pred_coord = (i, j+1)
+            
+            if sim < tau:
+                csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
+            else:
+                csm[i + 2, j + 2] = max(0, sim + pred_max)
+            
+            cur = csm[i + 2, j + 2]
+            if pred_max > 0 and cur > 0:
+                pi, pj = pred_coord
+
+                bp[i + 2, j + 2, 0] = pi
+                bp[i + 2, j + 2, 1] = pj
+
+                dist[i+2, j+2] = dist[pi, pj] + 1
+            
+    return csm, dist, bp
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -162,14 +189,15 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
+def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
     
     # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    start_mask = (~mask) # & (csm >= tau * min_path_length)
+    # start_mask = (~mask) # & (csm >= tau * min_path_length)
     
+    start_mask = (~mask) & (dist > l_min)
     pos_i, pos_j = np.nonzero(start_mask)
     
     values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
