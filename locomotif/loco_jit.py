@@ -103,31 +103,18 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     return csm
 
 
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_warping(csm, mask, i, j):
-    
+@njit(Array(int32, 2, 'C')(float32[:, :], int32[:, :, :], boolean[:, :], int32, int32))
+def best_path_warping(csm, bp, mask, i, j):
     path = []
     while i >= 2 and j >= 2:
-
         path.append((i, j))
-
-        maximum = max3(csm[i - 1, j - 1], csm[i - 2, j - 1], csm[i - 1, j - 2])
-
-        if csm[i - 1, j - 1] == maximum:
-            if mask[i - 1, j - 1]:
-                break
-            i, j = i - 1, j - 1
-        elif csm[i - 2, j - 1] == maximum:
-            if mask[i - 2, j - 1]:
-                break
-            i, j = i - 2, j - 1
-        else:
-            if mask[i - 1, j - 2]:
-                break
-            i, j = i - 1, j - 2
-
+        pi, pj = bp[i, j, 0], bp[i, j, 1]
+        if pi < 0 or pj < 0 or mask[pi, pj]:
+            break
+        i, j = pi, pj
+    
     path.reverse()
-    return np.array(path, dtype=np.int32)
+    return np.asarray(path, dtype=np.int32)
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
 def best_path_no_warping(csm, mask, i, j):
@@ -194,8 +181,8 @@ def update_dist(mask, dist, csm):
                 # TODO use backpointers
                 dist[i, j] = 1 
 
-# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
+# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # Store the csm as a sparse matrix so argmax is faster
     # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
     # masking the sparse matrix with these forbidden indeces is complexity O(nnz)
@@ -235,7 +222,7 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
                 return paths
             
             if warping:
-                path = best_path_warping(csm, mask, i_best, j_best)
+                path = best_path_warping(csm, bp, mask, i_best, j_best)
             else:
                 path = best_path_no_warping(csm, mask, i_best, j_best)
                 
