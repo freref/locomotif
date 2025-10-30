@@ -39,12 +39,14 @@ def max3(a, b, c):
 @njit(types.Tuple((
         types.float32[:, :], 
         types.int32[:, :],
+        types.int32[:, :, :]
     ))(float32[:, :], int32, float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     dist = np.zeros((n + 2, m + 2), dtype=np.int32)
+    bp = np.full((n + 2, m + 2, 2), -1, dtype=np.int32)
 
     for i in range(n):
 
@@ -76,9 +78,13 @@ def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, del
             cur = csm[i + 2, j + 2]
             if pred_max > 0 and cur > 0:
                 pi, pj = pred_coord
+
+                bp[i + 2, j + 2, 0] = pi
+                bp[i + 2, j + 2, 1] = pj
+
                 dist[i+2, j+2] = dist[pi, pj] + 1
             
-    return csm, dist
+    return csm, dist, bp
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -183,7 +189,7 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 @njit
-def update_dist(mask, dist, csm):
+def update_dist(mask, dist, bp):
     n, m = dist.shape
 
     for i in range(1, n):
@@ -191,8 +197,10 @@ def update_dist(mask, dist, csm):
             if mask[i, j]:
                 dist[i, j] = 0
             else:
-                # TODO use backpointers
-                dist[i, j] = 1 
+                pi = bp[i, j, 0]
+                pj = bp[i, j, 1]
+                if pi >= -1 and pj >= -1:
+                    dist[i, j] = 1.0 + dist[pi, pj]
 
 # @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
