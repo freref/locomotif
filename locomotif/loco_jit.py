@@ -208,10 +208,10 @@ def update_dist(mask, dist, bp):
 
 # @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
-    # Store the csm as a sparse matrix so argmax is faster
+    # XXX Store the csm as a sparse matrix so argmax is faster
     # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
     # masking the sparse matrix with these forbidden indeces is complexity O(nnz)
-    # filtering these forbidden indeces is emberassingly paralizeable
+    # filtering (masking) these forbidden indeces is emberassingly paralizeable
     # argmax is emberassingly paralizeable
     # updating the distance matrix is emberassingly paralizeable
     count = np.count_nonzero((csm == 0) | mask)
@@ -264,7 +264,7 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
         print("percentage:", 100.0 * count / csm.size)
         paths.append(path)
 
-        # This is currently not working because right now we are stopping if we mask, and im masking
+        # XXX This is currently not working because right now we are stopping if we mask, and im masking
         # everything that is <l_min so it stops when it hits that even when its not overlapping or a valid line
         # but in future when we do argmax instead and we max everything with distance < l_min every candidate we
         # follow will be valid, no more check needed if we are touching a mask, no more length check needed
