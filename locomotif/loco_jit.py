@@ -270,4 +270,7 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
         # follow will be valid, no more check needed if we are touching a mask, no more length check needed
         # all of that is covered when we update the dist matrix
 
+        # So we will apply this mask mask |= (dist <= l_min) and during application we will store the
+        # forbidden indeces for the sparse matrix 
+
     return paths
