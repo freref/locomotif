@@ -83,7 +83,6 @@ def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, del
                 bp[i + 2, j + 2, 1] = pj
 
                 dist[i+2, j+2] = dist[pi, pj] + 1
-            
     return csm, dist, bp
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
@@ -206,7 +205,7 @@ def update_dist(mask, dist, bp):
     
     return dist
 
-# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # XXX Store the csm as a sparse matrix so argmax is faster
     # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
