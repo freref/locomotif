@@ -206,7 +206,7 @@ def update_dist(mask, dist, bp):
     
     return dist
 
-# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # Store the csm as a sparse matrix so argmax is faster
     # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
@@ -214,8 +214,9 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # filtering these forbidden indeces is emberassingly paralizeable
     # argmax is emberassingly paralizeable
     # updating the distance matrix is emberassingly paralizeable
-    count = np.count_nonzero(csm == 0)
-    print(100.0 * count / csm.size)
+    count = np.count_nonzero((csm == 0) | mask)
+    print("amount:", csm.size - count)
+    print("percentage:", 100.0 * count / csm.size)
     mask = mask | (csm <= 0)
     
     start_mask = (~mask) & (dist > l_min)
@@ -238,15 +239,11 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
             while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
                 k_best -= 1
                 if k_best < 0:
-                    count = np.count_nonzero((csm == 0) | mask)
-                    print(100.0 * count / csm.size)
                     return paths
                 
             i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
 
             if i_best < 2 or j_best < 2:
-                count = np.count_nonzero((csm == 0) | mask)
-                print(100.0 * count / csm.size)
                 return paths
             
             if warping:
@@ -262,9 +259,10 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
 
         mask = mask_vicinity(path, mask, vwidth)
         dist = update_dist(mask, dist, bp)
-        mask[dist <= l_min] = True
+        mask |= (dist <= l_min)  
         count = np.count_nonzero((csm == 0) | mask)
-        print(csm.size - count)
+        print("amount:", csm.size - count)
+        print("percentage:", 100.0 * count / csm.size)
         paths.append(path)
 
     count = np.count_nonzero((csm == 0) | mask)
