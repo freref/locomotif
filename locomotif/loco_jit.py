@@ -206,7 +206,7 @@ def update_dist(mask, dist, bp):
     
     return dist
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+# @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     # Store the csm as a sparse matrix so argmax is faster
     # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
@@ -218,7 +218,6 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     print("amount:", csm.size - count)
     print("percentage:", 100.0 * count / csm.size)
     mask = mask | (csm <= 0)
-    
     start_mask = (~mask) & (dist > l_min)
     pos_i, pos_j = np.nonzero(start_mask)
     
@@ -259,12 +258,16 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
 
         mask = mask_vicinity(path, mask, vwidth)
         dist = update_dist(mask, dist, bp)
-        mask |= (dist <= l_min)  
+        mask |= (dist <= l_min)
         count = np.count_nonzero((csm == 0) | mask)
         print("amount:", csm.size - count)
         print("percentage:", 100.0 * count / csm.size)
         paths.append(path)
 
-    count = np.count_nonzero((csm == 0) | mask)
-    print(100.0 * count / csm.size)
+        # This is currently not working because right now we are stopping if we mask, and im masking
+        # everything that is <l_min so it stops when it hits that even when its not overlapping or a valid line
+        # but in future when we do argmax instead and we max everything with distance < l_min every candidate we
+        # follow will be valid, no more check needed if we are touching a mask, no more length check needed
+        # all of that is covered when we update the dist matrix
+
     return paths
