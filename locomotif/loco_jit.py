@@ -209,7 +209,7 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
             break
 
         values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-        print(len(values))
+
         if len(values) == 0:
             break
 
