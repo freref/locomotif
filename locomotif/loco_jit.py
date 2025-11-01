@@ -181,7 +181,8 @@ def mask_vicinity(path, mask, vwidth=10):
 
 @njit
 def update_dist(mask, dist, bp):
-# Do some kind've traversal, like BFS, only on changed cells, maybe keep those in `fobidden_new`
+# Do some kind've traversal, like BFS (we need forward pointers for this), only on changed cells, 
+# maybe keep those in `fobidden_new`
 # Once a path is > l_min I think we can stop updating
 # This way we dont have to recompute the entire distance matrix
     n, m = dist.shape
