@@ -196,37 +196,80 @@ def update_dist(mask, dist, bp):
     
     return dist
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
+from numba import njit, objmode
+import numpy as np, time
+from numba.types import List, Array, int32, float32, boolean
+
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :],
+                                  boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = []
-    mask_v = np.copy(mask)      # vicinity mask
-    mask_d = np.copy(mask)      # distance mask
+    mask_v = np.copy(mask)
+    mask_d = np.copy(mask)
+
+    t_start=t_nonzero=t_values=t_argmax=t_path=t_updates=t_append=0.0
 
     while True:
+        # start_mask
+        with objmode(ts='f8'): ts = time.perf_counter()
         start_mask = (~(mask_v | mask_d)) & (dist >= l_min)
+        with objmode(te='f8'): te = time.perf_counter()
+        t_start += te - ts
+
+        # nonzero
+        with objmode(ts='f8'): ts = time.perf_counter()
         pos_i, pos_j = np.nonzero(start_mask)
+        with objmode(te='f8'): te = time.perf_counter()
+        t_nonzero += te - ts
         if len(pos_i) == 0:
             break
 
+        # values
+        with objmode(ts='f8'): ts = time.perf_counter()
         values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-        print(len(values))
+        with objmode(te='f8'): te = time.perf_counter()
+        t_values += te - ts
         if len(values) == 0:
             break
 
+        # argmax/select
+        with objmode(ts='f8'): ts = time.perf_counter()
         k_best = np.argmax(values)
         i_best, j_best = pos_i[k_best], pos_j[k_best]
+        with objmode(te='f8'): te = time.perf_counter()
+        t_argmax += te - ts
         if csm[i_best, j_best] <= 0:
             break
 
-        if warping:
-            path = best_path_warping(bp, mask_v, i_best, j_best)
-        else:
-            path = best_path_no_warping(csm, mask_v, i_best, j_best)
+        # path
+        with objmode(ts='f8'): ts = time.perf_counter()
+        path = (best_path_warping(bp, mask_v, i_best, j_best)
+                if warping else best_path_no_warping(csm, mask_v, i_best, j_best))
+        with objmode(te='f8'): te = time.perf_counter()
+        t_path += te - ts
 
+        # updates
+        with objmode(ts='f8'): ts = time.perf_counter()
         mask_v = mask_vicinity(path, mask_v, vwidth)
         dist = update_dist(mask_v, dist, bp)
         mask_d = (dist < l_min)
+        with objmode(te='f8'): te = time.perf_counter()
+        t_updates += te - ts
 
+        # append
+        with objmode(ts='f8'): ts = time.perf_counter()
         paths.append(path)
-    
+        with objmode(te='f8'): te = time.perf_counter()
+        t_append += te - ts
+
+    with objmode():
+        total = t_start+t_nonzero+t_values+t_argmax+t_path+t_updates+t_append
+        print("Times (s): start_mask",round(t_start,6),
+              "nonzero",round(t_nonzero,6),
+              "values",round(t_values,6),
+              "argmax",round(t_argmax,6),
+              "path",round(t_path,6),
+              "updates",round(t_updates,6),
+              "append",round(t_append,6),
+              "total",round(total,6))
     return paths
