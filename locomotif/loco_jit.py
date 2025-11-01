@@ -203,7 +203,7 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     mask_d = np.copy(mask)      # distance mask
 
     while True:
-        start_mask = (~(mask_v | mask_d)) & (dist >= l_min)
+        start_mask = (~(mask_v | mask_d))
         pos_i, pos_j = np.nonzero(start_mask)
         if len(pos_i) == 0:
             break
