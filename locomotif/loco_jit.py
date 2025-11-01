@@ -181,6 +181,9 @@ def mask_vicinity(path, mask, vwidth=10):
 
 @njit
 def update_dist(mask, dist, bp):
+# Do some kind've traversal, like BFS, only on changed cells, maybe keep those in `fobidden_new`
+# Once a path is > l_min I think we can stop updating
+# This way we dont have to recompute the entire distance matrix
     n, m = dist.shape
     for i in range(n):
         for j in range(m):
@@ -201,10 +204,15 @@ def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = []
     mask_v = np.copy(mask)      # vicinity mask
     mask_d = np.copy(mask)      # distance mask
+    # forbidden_v = {}
+    # forbidden_d = {}
 
     while True:
         start_mask = (~(mask_v | mask_d))
         pos_i, pos_j = np.nonzero(start_mask)
+        # Instead of masking and having to do multiple masking loops, just keep values and forbidden indeces in a set
+        # We can take the forbidden indeces out during argmax
+        # This prevents all the mask loops
         if len(pos_i) == 0:
             break
 
