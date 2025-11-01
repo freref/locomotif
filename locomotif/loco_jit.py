@@ -3,7 +3,7 @@ import numpy as np
 
 ### JIT
 from numba import int32, float64, float32, boolean
-from numba import njit, types
+from numba import njit, types, objmode
 from numba.types import List, Array
 from numba import prange
 
@@ -108,31 +108,23 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     return csm
 
 
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_warping(csm, mask, i, j):
-    
+@njit(Array(int32, 2, 'C')(int32[:, :, :], boolean[:, :], int32, int32))
+def best_path_warping(bp, mask, i, j):
     path = []
-    while i >= 2 and j >= 2:
-
+    while i >= 0 and j >= 0:
         path.append((i, j))
-
-        maximum = max3(csm[i - 1, j - 1], csm[i - 2, j - 1], csm[i - 1, j - 2])
-
-        if csm[i - 1, j - 1] == maximum:
-            if mask[i - 1, j - 1]:
-                break
-            i, j = i - 1, j - 1
-        elif csm[i - 2, j - 1] == maximum:
-            if mask[i - 2, j - 1]:
-                break
-            i, j = i - 2, j - 1
-        else:
-            if mask[i - 1, j - 2]:
-                break
-            i, j = i - 1, j - 2
-
+        pi = bp[i, j, 0]
+        pj = bp[i, j, 1]
+        if pi < 0 or pj < 0:
+            break
+        if mask[pi, pj]:
+            break
+        if pi == i and pj == j:
+            break
+        i, j = pi, pj
     path.reverse()
     return np.array(path, dtype=np.int32)
+
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
 def best_path_no_warping(csm, mask, i, j):
@@ -187,7 +179,6 @@ def mask_vicinity(path, mask, vwidth=10):
     mask[ic, max(0, jc - vwidth) : min(m, jc + vwidth + 1)] = True
     return mask
 
-# just a test function to see how many zeroes we can get, we should only change the affected cells
 @njit
 def update_dist(mask, dist, bp):
     n, m = dist.shape
@@ -207,69 +198,33 @@ def update_dist(mask, dist, bp):
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
-    # XXX Store the csm as a sparse matrix so argmax is faster
-    # use backpointers to create "sparse" masks (which are forbidden indeces) and store in a set
-    # masking the sparse matrix with these forbidden indeces is complexity O(nnz)
-    # filtering (masking) these forbidden indeces is emberassingly paralizeable
-    # argmax is emberassingly paralizeable
-    # updating the distance matrix is emberassingly paralizeable
-    count = np.count_nonzero((csm == 0) | mask)
-    print("amount:", csm.size - count)
-    print("percentage:", 100.0 * count / csm.size)
-    mask = mask | (csm <= 0)
-    start_mask = (~mask) & (dist > l_min)
-    pos_i, pos_j = np.nonzero(start_mask)
-    
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
-
-    k_best = len(sorted_pos_i) - 1
     paths = []
+    mask_v = np.copy(mask)      # vicinity mask
+    mask_d = np.copy(mask)      # distance mask
 
-    while k_best >= 0:
+    while True:
+        start_mask = (~(mask_v | mask_d)) & (dist >= l_min)
+        pos_i, pos_j = np.nonzero(start_mask)
+        if len(pos_i) == 0:
+            return paths
 
-        path = np.empty((0, 0), dtype=np.int32)
-        path_found = False
+        values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
+        print(len(values))
+        if len(values) == 0:
+            return paths
 
-        while not path_found:
+        k_best = np.argmax(values)
+        i_best, j_best = pos_i[k_best], pos_j[k_best]
+        if csm[i_best, j_best] <= 0:
+            return paths
 
-            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
-                k_best -= 1
-                if k_best < 0:
-                    return paths
-                
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+        if warping:
+            path = best_path_warping(bp, mask_v, i_best, j_best)
+        else:
+            path = best_path_no_warping(csm, mask_v, i_best, j_best)
 
-            if i_best < 2 or j_best < 2:
-                return paths
-            
-            if warping:
-                path = best_path_warping(csm, mask, i_best, j_best)
-            else:
-                path = best_path_no_warping(csm, mask, i_best, j_best)
-                
-            mask = mask_vicinity(path, mask, 0)
-            
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-                path_found = True
+        mask_v = mask_vicinity(path, mask_v, vwidth)
+        dist = update_dist(mask_v, dist, bp)
+        mask_d = (dist < l_min)
 
-
-        mask = mask_vicinity(path, mask, vwidth)
-        dist = update_dist(mask, dist, bp)
-        mask |= (dist <= l_min)
-        count = np.count_nonzero((csm == 0) | mask)
-        print("amount:", csm.size - count)
-        print("percentage:", 100.0 * count / csm.size)
         paths.append(path)
-
-        # XXX This is currently not working because right now we are stopping if we mask, and im masking
-        # everything that is <l_min so it stops when it hits that even when its not overlapping or a valid line
-        # but in future when we do argmax instead and we max everything with distance < l_min every candidate we
-        # follow will be valid, no more check needed if we are touching a mask, no more length check needed
-        # all of that is covered when we update the dist matrix
-
-        # So we will apply this mask mask |= (dist <= l_min) and during application we will store the
-        # forbidden indeces for the sparse matrix 
-
-    return paths
