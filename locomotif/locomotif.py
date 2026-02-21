@@ -8,6 +8,61 @@ from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
 
+@njit(cache=True)
+def _is_diagonal_path(path):
+    for k in range(len(path)):
+        if path[k, 0] != path[k, 1]:
+            return False
+    return True
+
+@njit(cache=True)
+def _mirror_path(path):
+    out = np.empty(path.shape, dtype=np.int32)
+    out[:, 0] = path[:, 1]
+    out[:, 1] = path[:, 0]
+    return out
+
+@njit(cache=True)
+def _path_similarities_from_sm(path, sm):
+    sims = np.empty(len(path), dtype=np.float32)
+    for k in range(len(path)):
+        sims[k] = sm[path[k, 0], path[k, 1]]
+    return sims
+
+@njit(cache=True)
+def _path_similarities_from_ts(path, ts1, ts2, gamma):
+    dims = ts1.shape[1]
+    sims = np.empty(len(path), dtype=np.float32)
+    for k in range(len(path)):
+        i = path[k, 0]
+        j = path[k, 1]
+        d2 = 0.0
+        for d in range(dims):
+            diff = ts1[i, d] - ts2[j, d]
+            d2 += gamma[d] * diff * diff
+        sims[k] = np.exp(-d2)
+    return sims
+
+@njit(cache=True)
+def _build_paths_with_sm(paths, sm):
+    out = List()
+    for p in paths:
+        sims = _path_similarities_from_sm(p, sm)
+        out.append(Path(p, sims))
+        if not _is_diagonal_path(p):
+            out.append(Path(_mirror_path(p), sims))
+    return out
+
+@njit(cache=True)
+def _build_paths_with_ts(paths, ts1, ts2, gamma):
+    out = List()
+    for p in paths:
+        sims = _path_similarities_from_ts(p, ts1, ts2, gamma)
+        out.append(Path(p, sims))
+        if not _is_diagonal_path(p):
+            out.append(Path(_mirror_path(p), sims))
+    return out
+
 def apply_locomotif(
     ts,
     l_min,
@@ -59,7 +114,6 @@ def apply_locomotif(
         event_probe_rows=event_probe_rows,
         block_tile_size=block_tile_size,
     )
-    # Apply LoCo
     lcm.find_best_paths(vwidth=l_min // 2)
     # Find the `nb` best motif sets
     motif_sets = []
@@ -202,27 +256,16 @@ class LoCoMotif:
     def find_best_paths(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2)
         paths = self._loco.find_best_paths(self.l_min, vwidth)
-       
-        # LoCo finds paths the part of the SSM above the diagonal. 
-        # Here, the paths are converted to Path objects, and the mirrored versions of the found paths are added.
-        self._paths = List()
-        
-        for path in paths:
-            i, j = path[:, 0], path[:, 1]
-            if self.self_similarity_matrix is not None:
-                path_similarities = self.self_similarity_matrix[i, j]
-            else:
-                path_similarities = self._loco.path_similarities(path)
-            self._paths.append(Path(path, path_similarities))
-            # Also add the mirrored path
-            # Do not mirror the diagonal
-            if np.all(i == j):
-                continue
-            path_mirrored = np.empty(path.shape, dtype=np.int32)
-            path_mirrored[:, 0] = j
-            path_mirrored[:, 1] = i
-            self._paths.append(Path(path_mirrored, path_similarities))
 
+        raw_paths = List()
+        for path in paths:
+            raw_paths.append(np.ascontiguousarray(path, dtype=np.int32))
+
+        sm = self.self_similarity_matrix
+        if sm is not None:
+            self._paths = _build_paths_with_sm(raw_paths, sm)
+        else:
+            self._paths = _build_paths_with_ts(raw_paths, self._loco.ts, self._loco.ts2, self._loco.gamma)
         return self._paths
 
     def induced_paths(self, b, e, mask=None):
@@ -235,7 +278,7 @@ class LoCoMotif:
         if self._paths is None:
             self.find_best_paths()
             
-        n = len(self.ts)
+        n = np.int32(len(self.ts))
         # Handle masks
         if start_mask is None:
             start_mask = np.full(n, True)
@@ -249,6 +292,7 @@ class LoCoMotif:
         # iteratively find best motif sets
         current_nb = 0
         mask       = np.full(n, False)
+        overlap_f32 = np.float32(overlap)
         while (nb is None or current_nb < nb):
 
             if np.all(mask) or not np.any(start_mask) or not np.any(end_mask):
@@ -257,7 +301,7 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
 
-            (b, e), best_fitness, fitnesses = _find_best_candidate(self._paths, n, self.l_min, self.l_max, overlap, mask, mask, start_mask, end_mask, keep_fitnesses=keep_fitnesses)
+            (b, e), best_fitness, fitnesses = _find_best_candidate(self._paths, n, self.l_min, self.l_max, overlap_f32, mask, mask, start_mask, end_mask, keep_fitnesses=keep_fitnesses)
 
             if best_fitness == 0.0:
                 break
@@ -380,7 +424,7 @@ class SortedPathArray:
         self.path_indices[k] = path_index 
         self.size += 1 
 
-@njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(numba.types.ListType(Path.class_type.instance_type), int32, int32, int32, float32, boolean[:], boolean[:], boolean[:], boolean[:], boolean), cache=True)
+@njit(cache=True)
 def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False): 
     fitnesses = []
     r = len(row_mask)
