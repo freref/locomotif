@@ -729,6 +729,105 @@ def _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size):
 
     return best_value, best_cell
 
+@njit
+def _mark_tile_dirty(dirty_tiles, tile):
+    if tile < 0 or tile >= len(dirty_tiles):
+        return
+    dirty_tiles[tile] = True
+
+@njit
+def _mark_row_range_dirty(dirty_tiles, row, j1, j2, tile_size, n_tile_cols):
+    if j2 <= j1:
+        return
+    tr = row // tile_size
+    tc1 = j1 // tile_size
+    tc2 = (j2 - 1) // tile_size
+    for tc in range(tc1, tc2 + 1):
+        tile = tr * n_tile_cols + tc
+        _mark_tile_dirty(dirty_tiles, tile)
+
+@njit
+def _mark_col_range_dirty(dirty_tiles, col, i1, i2, tile_size, n_tile_cols):
+    if i2 <= i1:
+        return
+    tc = col // tile_size
+    tr1 = i1 // tile_size
+    tr2 = (i2 - 1) // tile_size
+    for tr in range(tr1, tr2 + 1):
+        tile = tr * n_tile_cols + tc
+        _mark_tile_dirty(dirty_tiles, tile)
+
+@njit
+def _mask_path_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols):
+    for k in range(len(path) - 1):
+        ic, jc = path[k]
+        it, jt = path[k + 1]
+        mask[ic, jc] = True
+        tile = (ic // tile_size) * n_tile_cols + (jc // tile_size)
+        _mark_tile_dirty(dirty_tiles, tile)
+
+        di, dj = (it - ic, jt - jc)
+        if di == 2 and dj == 1:
+            mask[ic + 1, jc] = True
+            tile = ((ic + 1) // tile_size) * n_tile_cols + (jc // tile_size)
+            _mark_tile_dirty(dirty_tiles, tile)
+        elif di == 1 and dj == 2:
+            mask[ic, jc + 1] = True
+            tile = (ic // tile_size) * n_tile_cols + ((jc + 1) // tile_size)
+            _mark_tile_dirty(dirty_tiles, tile)
+        elif not (di == 1 and dj == 1):
+            raise Exception("Path does not comply to the allowed step sizes")
+
+    ic, jc = path[-1]
+    mask[ic, jc] = True
+    tile = (ic // tile_size) * n_tile_cols + (jc // tile_size)
+    _mark_tile_dirty(dirty_tiles, tile)
+
+@njit
+def _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth=10):
+    n, m = mask.shape
+
+    for k in range(len(path)-1):
+        ic, jc = path[k]
+        it, jt = path[k + 1]
+        di, dj = (it - ic, jt - jc)
+
+        i1, i2 = max(0, ic - vwidth), min(n, ic + vwidth + 1)
+        j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
+
+        mask[i1:i2, jc] = True
+        _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
+        mask[ic, j1:j2] = True
+        _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
+
+        if di == 2 and dj == 1:
+            if i2 + 1 < n:
+                mask[ic + 1, jc] = True
+                tile = ((ic + 1) // tile_size) * n_tile_cols + (jc // tile_size)
+                _mark_tile_dirty(dirty_tiles, tile)
+            mask[ic + 1, j1:j2] = True
+            _mark_row_range_dirty(dirty_tiles, ic + 1, j1, j2, tile_size, n_tile_cols)
+
+        elif di == 1 and dj == 2:
+            if j2 + 1 < m:
+                mask[ic, jc + 1] = True
+                tile = (ic // tile_size) * n_tile_cols + ((jc + 1) // tile_size)
+                _mark_tile_dirty(dirty_tiles, tile)
+            mask[i1:i2, jc + 1] = True
+            _mark_col_range_dirty(dirty_tiles, jc + 1, i1, i2, tile_size, n_tile_cols)
+
+        else:
+            if not (di == 1 and dj == 1):
+                raise Exception("Path does not comply to the allowed step sizes")
+
+    ic, jc = path[-1]
+    i1, i2 = max(0, ic - vwidth), min(n, ic + vwidth + 1)
+    j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
+    mask[i1:i2, jc] = True
+    _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
+    mask[ic, j1:j2] = True
+    _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
+
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], uint8[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths_heap_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
     mask = mask | (csm <= 0)
@@ -794,6 +893,7 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
     n_tile_rows = (n_rows + tile_size - 1) // tile_size
     n_tile_cols = (n_cols + tile_size - 1) // tile_size
     n_tiles = n_tile_rows * n_tile_cols
+    dirty_tiles = np.zeros(n_tiles, dtype=np.bool_)
 
     heap_values = np.empty(n_tiles, dtype=np.float32)
     heap_cells = np.empty(n_tiles, dtype=np.int32)
@@ -814,33 +914,29 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
     while size > 0:
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
-        selected_tile = np.int32(-1)
 
         while not path_found:
             while True:
                 if size <= 0:
                     return paths
 
-                old_value, old_cell, tile, size = _heap3_pop_max(heap_values, heap_cells, heap_tiles, size)
-                cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
-
-                if cur_cell < 0:
-                    continue
-
-                if cur_cell != old_cell or cur_value != old_value:
-                    size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
-                    continue
-
-                if size > 0:
-                    top_value = heap_values[0]
-                    top_cell = heap_cells[0]
-                    if _pair_is_greater(top_value, top_cell, cur_value, cur_cell):
+                _, cell, tile, size = _heap3_pop_max(heap_values, heap_cells, heap_tiles, size)
+                if dirty_tiles[tile]:
+                    dirty_tiles[tile] = False
+                    cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                    if cur_cell >= 0:
                         size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
-                        continue
+                    continue
 
-                i_best = np.int32(cur_cell // n_cols)
-                j_best = np.int32(cur_cell - i_best * n_cols)
-                selected_tile = tile
+                i_best = np.int32(cell // n_cols)
+                j_best = np.int32(cell - i_best * n_cols)
+                if mask[i_best, j_best] or not eligible[i_best, j_best]:
+                    dirty_tiles[tile] = True
+                    cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                    dirty_tiles[tile] = False
+                    if cur_cell >= 0:
+                        size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
+                    continue
                 break
 
             if i_best < 2 or j_best < 2:
@@ -851,17 +947,12 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
             else:
                 path = best_path_no_warping_bp(bp, mask, i_best, j_best)
 
-            mask = mask_path(path, mask)
-
-            if selected_tile >= 0:
-                push_value, push_cell = _tile_best_candidate(csm, eligible, mask, selected_tile, n_tile_cols, tile_size)
-                if push_cell >= 0:
-                    size = _heap3_push(heap_values, heap_cells, heap_tiles, size, push_value, push_cell, selected_tile)
+            _mask_path_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols)
 
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
                 path_found = True
 
-        mask = mask_vicinity(path, mask, vwidth)
+        _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth)
         paths.append(path)
 
     return paths

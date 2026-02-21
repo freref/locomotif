@@ -218,7 +218,7 @@ class LoCoMotif:
             # Do not mirror the diagonal
             if np.all(i == j):
                 continue
-            path_mirrored = np.zeros(path.shape, dtype=np.int32)
+            path_mirrored = np.empty(path.shape, dtype=np.int32)
             path_mirrored[:, 0] = j
             path_mirrored[:, 1] = i
             self._paths.append(Path(path_mirrored, path_similarities))
@@ -338,115 +338,101 @@ class SortedPathArray:
     def increment_j(self):
         self.j += 1
 
-        # Remove the paths for which jl == j
-        k_remove = 0
-        for _ in range(self.size):
-            if self.jls[self.path_indices[k_remove]] == self.j:
-                self._remove_at(k_remove)
-            else:
-                k_remove += 1
+        new_size = 0
+        for old_k in range(self.size):
+            path_index = self.path_indices[old_k]
+            if self.jls[path_index] != self.j:
+                if new_size != old_k:
+                    self.keys[new_size] = self.keys[old_k]
+                    self.path_indices[new_size] = path_index
+                new_size += 1
+        self.size = new_size
 
-        # If a path will be inserted, update the keys
-        # if self.j1s[self.Q[self.q]] == self.j:
         self._update_keys()
 
-        # Insert all paths for which j1 == b
-        for q in range(self.q, len(self.P)):
+        q = self.q
+        while q < len(self.P):
             path_index = self.Q[q]
             if self.j1s[path_index] == self.j:
                 self._insert(path_index)
+                q += 1
             else:
                 break
         self.q = q
 
 
-    def get_path_at(self, k):
-        return self.P[self.path_indices[k]]
-
     def _update_keys(self):
-        # Update the keys (as paths cannot cross, the ordering of keys does not change)
         for k in range(self.size):
-            path_to_update = self.get_path_at(k)
-            self.keys[k] = path_to_update[path_to_update.find_j(self.j)][0]
+            path_to_update = self.P[self.path_indices[k]]
+            path_idx = path_to_update.index_j[self.j - path_to_update.j1]
+            self.keys[k] = path_to_update.path[path_idx, 0]
   
     def _insert(self, path_index):
-        """Insert (key, value) while maintaining sorted order of keys."""
         assert self.size < self.capacity
-        # Binary search to find the correct position of the key
         path_to_insert = self.P[path_index]
-        key = path_to_insert[path_to_insert.find_j(self.j)][0]
+        path_idx = path_to_insert.index_j[self.j - path_to_insert.j1]
+        key = path_to_insert.path[path_idx, 0]
 
         k = np.searchsorted(self.keys[:self.size], key)
-        # Shift items to the right
         self.keys[k+1:self.size+1] = self.keys[k:self.size]
         self.path_indices[k+1:self.size+1] = self.path_indices[k:self.size]
-        # Insert the new item
         self.keys[k] = key
         self.path_indices[k] = path_index 
-        # Increase size
         self.size += 1 
-
-    def _remove_at(self, k):
-        """Removes an item at a specific index."""
-        assert k >= 0 and k < self.size
-        # Shift elements left to fill the gap
-        self.keys[k:self.size-1] = self.keys[k+1:self.size]
-        self.path_indices[k:self.size-1] = self.path_indices[k+1:self.size]
-        # Last element need not be cleared
-        self.size -= 1  # Decrease size
-
 
 @njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(numba.types.ListType(Path.class_type.instance_type), int32, int32, int32, float32, boolean[:], boolean[:], boolean[:], boolean[:], boolean), cache=True)
 def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False): 
     fitnesses = []
-    # n is used for coverage normalization 
     r = len(row_mask)
     c = len(col_mask)
 
-    # Max number of relevant paths
     max_size = int(np.ceil(r / (l_min // 2 + 1))) 
-    # Initialize Pb
     Pb  = SortedPathArray(P, -1, max_size)
-    # Pe is implemented as a mask
-    Pe  = np.zeros(max_size)
-    # Initialize
+    Pe  = np.zeros(max_size, dtype=np.bool_)
     es_checked = np.zeros(max_size, dtype=np.int32)
+    kb_by_path = np.zeros(max_size, dtype=np.int32)
+    b_by_path = np.zeros(max_size, dtype=np.int32)
+
+    row_prefix = np.zeros(r + 1, dtype=np.int32)
+    for idx in range(r):
+        row_prefix[idx + 1] = row_prefix[idx] + (1 if row_mask[idx] else 0)
+
+    col_prefix = np.zeros(c + 1, dtype=np.int32)
+    for idx in range(c):
+        col_prefix[idx + 1] = col_prefix[idx] + (1 if col_mask[idx] else 0)
 
     best_fitness   = 0.0
     best_candidate = (0, 0) 
 
-    # b-loop
     for b_repr in range(c - l_min + 1):
         Pb.increment_j()
 
         nb_paths = Pb.size
         
-        # If less than 2 paths in Pb, skip this b.
         if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
             continue
 
-        ### Check initial coincidence with previously discovered motifs
-        # For the representative
-        if np.any(col_mask[b_repr:b_repr + l_min - 1]):
+        if col_prefix[b_repr + l_min - 1] > col_prefix[b_repr]:
             continue
 
-        # For each of the induced segments
         Pe[:nb_paths] = True
-        es_checked[:nb_paths] = Pb.keys[:nb_paths] 
+        es_checked[:nb_paths] = Pb.keys[:nb_paths]
+        for k in range(nb_paths):
+            path = P[Pb.path_indices[k]]
+            kb = path.index_j[b_repr - path.j1]
+            kb_by_path[k] = kb
+            b_by_path[k] = path.path[kb, 0]
+
         nb_remaining_paths = nb_paths
 
         for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
 
-            # Check coincidence with previously found motifs
-            # For the representative 
             if col_mask[e_repr-1]:
                 break
 
-            # Skip iteration if representative cannot end at this index
             if not end_mask[e_repr-1]:
                 continue
 
-            # Calculate the fitness
             score = 0.0
             total_length = 0.0
             total_path_length = 0.0
@@ -463,18 +449,18 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
                 if not Pe[k]:
                     continue
 
-                path = Pb.get_path_at(k)
+                path = P[Pb.path_indices[k]]
                 if path.jl < e_repr:
                     Pe[k] = False
                     nb_remaining_paths -= 1
                     continue
 
-                kb = path.find_j(b_repr)
-                b = path[kb][0]
-                ke = path.find_j(e_repr-1)
-                e  = path[ke][0] + 1
+                kb = kb_by_path[k]
+                b = b_by_path[k]
+                ke = path.index_j[e_repr - 1 - path.j1]
+                e  = path.path[ke, 0] + 1
                 
-                if np.any(row_mask[es_checked[k]:e]):
+                if row_prefix[e] > row_prefix[es_checked[k]]:
                     Pe[k] = False
                     nb_remaining_paths -= 1
                     continue

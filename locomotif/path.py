@@ -9,8 +9,10 @@ class Path:
     def __init__(self, path, similarities):
         assert len(path) == len(similarities)
         self.path = path
-        self.similarities = similarities.astype(np.float32)
-        self.cumulative_similarities = np.concatenate((np.array([0.0], dtype=np.float32), np.cumsum(similarities)))
+        self.similarities = np.asarray(similarities, dtype=np.float32)
+        self.cumulative_similarities = np.empty(len(self.similarities) + 1, dtype=np.float32)
+        self.cumulative_similarities[0] = 0.0
+        self.cumulative_similarities[1:] = np.cumsum(self.similarities)
         self.i1 = path[0][0]
         self.il = path[len(path) - 1][0] + 1
         self.j1 = path[0][1]
@@ -32,13 +34,16 @@ class Path:
         index_j = np.zeros(self.jl - self.j1, dtype=np.int32)
 
         for i in range(1, len(path)):
-            if path[i][0] != i_curr:
-                index_i[i_curr - self.i1 + 1 : path[i][0] - self.i1 + 1] = i
-                i_curr = path[i][0]
+            i_next = path[i, 0]
+            j_next = path[i, 1]
 
-            if path[i][1] != j_curr:
-                index_j[j_curr - self.j1 + 1 : path[i][1] - self.j1 + 1] = i
-                j_curr = path[i][1]
+            if i_next != i_curr:
+                index_i[i_curr - self.i1 + 1 : i_next - self.i1 + 1] = i
+                i_curr = i_next
+
+            if j_next != j_curr:
+                index_j[j_curr - self.j1 + 1 : j_next - self.j1 + 1] = i
+                j_curr = j_next
         
         self.index_i = index_i
         self.index_j = index_j
