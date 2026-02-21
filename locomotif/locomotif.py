@@ -8,7 +8,26 @@ from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
 
-def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
+def apply_locomotif(
+    ts,
+    l_min,
+    l_max,
+    rho=None,
+    nb=None,
+    start_mask=None,
+    end_mask=None,
+    overlap=0.0,
+    warping=True,
+    sparse_events=False,
+    sparse_event_tau=None,
+    sparse_max_gap=8,
+    sparse_row_topk=64,
+    backend="auto",
+    event_density_fallback=0.20,
+    event_index="auto",
+    event_probe_rows=128,
+    block_tile_size=24,
+):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
     :param ts: Univariate or multivariate time series, with the time axis being the 0-th dimension.
@@ -24,7 +43,22 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
     """   
     # Get a locomotif instance
-    lcm = get_locomotif_instance(ts, l_min, l_max, rho=rho, warping=warping)
+    lcm = get_locomotif_instance(
+        ts,
+        l_min,
+        l_max,
+        rho=rho,
+        warping=warping,
+        sparse_events=sparse_events,
+        sparse_event_tau=sparse_event_tau,
+        sparse_max_gap=sparse_max_gap,
+        sparse_row_topk=sparse_row_topk,
+        backend=backend,
+        event_density_fallback=event_density_fallback,
+        event_index=event_index,
+        event_probe_rows=event_probe_rows,
+        block_tile_size=block_tile_size,
+    )
     # Apply LoCo
     lcm.find_best_paths(vwidth=l_min // 2)
     # Find the `nb` best motif sets
@@ -33,28 +67,136 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
         motif_sets.append((representative, motif_set))
     return motif_sets
 
-def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
-    return LoCoMotif.instance_from_rho(ts, l_min=l_min, l_max=l_max, rho=rho, warping=warping)
+def get_locomotif_instance(
+    ts,
+    l_min,
+    l_max,
+    rho=None,
+    warping=True,
+    sparse_events=False,
+    sparse_event_tau=None,
+    sparse_max_gap=8,
+    sparse_row_topk=64,
+    backend="auto",
+    event_density_fallback=0.20,
+    event_index="auto",
+    event_probe_rows=128,
+    block_tile_size=24,
+):
+    return LoCoMotif.instance_from_rho(
+        ts,
+        l_min=l_min,
+        l_max=l_max,
+        rho=rho,
+        warping=warping,
+        sparse_events=sparse_events,
+        sparse_event_tau=sparse_event_tau,
+        sparse_max_gap=sparse_max_gap,
+        sparse_row_topk=sparse_row_topk,
+        backend=backend,
+        event_density_fallback=event_density_fallback,
+        event_index=event_index,
+        event_probe_rows=event_probe_rows,
+        block_tile_size=block_tile_size,
+    )
 
 
 class LoCoMotif:
 
-    def __init__(self, ts, l_min, l_max, gamma=None, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True):        
+    def __init__(
+        self,
+        ts,
+        l_min,
+        l_max,
+        gamma=None,
+        tau=0.5,
+        delta_a=1.0,
+        delta_m=0.5,
+        warping=True,
+        sparse_events=False,
+        sparse_event_tau=None,
+        sparse_max_gap=8,
+        sparse_row_topk=64,
+        backend="auto",
+        event_density_fallback=0.20,
+        event_index="auto",
+        event_probe_rows=128,
+        block_tile_size=24,
+    ):
         self.ts = ts
         l_min = max(4, l_min)
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
         # LoCo instance
-        self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, warping=warping)
+        self._loco = loco.LoCo(
+            ts,
+            gamma=gamma,
+            tau=tau,
+            delta_a=delta_a,
+            delta_m=delta_m,
+            warping=warping,
+            sparse_events=sparse_events,
+            sparse_event_tau=sparse_event_tau,
+            sparse_max_gap=sparse_max_gap,
+            sparse_row_topk=sparse_row_topk,
+            backend=backend,
+            event_density_fallback=event_density_fallback,
+            event_index=event_index,
+            event_probe_rows=event_probe_rows,
+            block_tile_size=block_tile_size,
+        )
         self._paths = None
 
     @classmethod
-    def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True):
+    def instance_from_rho(
+        cls,
+        ts,
+        l_min,
+        l_max,
+        rho=None,
+        warping=True,
+        sparse_events=False,
+        sparse_event_tau=None,
+        sparse_max_gap=8,
+        sparse_row_topk=64,
+        backend="auto",
+        event_density_fallback=0.20,
+        event_index="auto",
+        event_probe_rows=128,
+        block_tile_size=24,
+    ):
         # Handle default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5  
-        lcm = cls(ts=ts, l_min=l_min, l_max=l_max)
-        lcm._loco = loco.LoCo.instance_from_rho(ts, rho, gamma=None, warping=warping)
+        lcm = cls(
+            ts=ts,
+            l_min=l_min,
+            l_max=l_max,
+            sparse_events=sparse_events,
+            sparse_event_tau=sparse_event_tau,
+            sparse_max_gap=sparse_max_gap,
+            sparse_row_topk=sparse_row_topk,
+            backend=backend,
+            event_density_fallback=event_density_fallback,
+            event_index=event_index,
+            event_probe_rows=event_probe_rows,
+            block_tile_size=block_tile_size,
+        )
+        lcm._loco = loco.LoCo.instance_from_rho(
+            ts,
+            rho,
+            gamma=None,
+            warping=warping,
+            sparse_events=sparse_events,
+            sparse_event_tau=sparse_event_tau,
+            sparse_max_gap=sparse_max_gap,
+            sparse_row_topk=sparse_row_topk,
+            backend=backend,
+            event_density_fallback=event_density_fallback,
+            event_index=event_index,
+            event_probe_rows=event_probe_rows,
+            block_tile_size=block_tile_size,
+        )
         return lcm
 
     def find_best_paths(self, vwidth=None):
@@ -67,7 +209,10 @@ class LoCoMotif:
         
         for path in paths:
             i, j = path[:, 0], path[:, 1]
-            path_similarities = self.self_similarity_matrix[i, j]
+            if self.self_similarity_matrix is not None:
+                path_similarities = self.self_similarity_matrix[i, j]
+            else:
+                path_similarities = self._loco.path_similarities(path)
             self._paths.append(Path(path, path_similarities))
             # Also add the mirrored path
             # Do not mirror the diagonal
