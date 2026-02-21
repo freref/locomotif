@@ -177,8 +177,7 @@ def deactivate_dense_idx(flat_idx, dense_to_sparse, active_sparse, sparse_to_act
 
 @njit
 def deactivate_forbidden(forbidden, dense_to_sparse, active_sparse, sparse_to_active, active_size):
-    for flat_idx64 in forbidden:
-        flat_idx = np.int32(flat_idx64)
+    for flat_idx in forbidden:
         active_size = deactivate_dense_idx(flat_idx, dense_to_sparse, active_sparse, sparse_to_active, active_size)
     return active_size
 
@@ -272,133 +271,6 @@ def update_dist_and_record(mask, dist, bp, l_min, forbidden):
     return dist
 
 
-@njit
-def normalize_dist_clamped(mask, dist, l_min):
-    n, m = dist.shape
-    cap = l_min + 1
-    for i in range(n):
-        for j in range(m):
-            if mask[i, j]:
-                dist[i, j] = 0
-            elif dist[i, j] > cap:
-                dist[i, j] = cap
-    return dist
-
-
-@njit(types.Tuple((int32[:], int32[:]))(int32[:, :, :]))
-def build_reverse_bp_graph(bp):
-    n, m, _ = bp.shape
-    n_cells = n * m
-
-    counts = np.zeros(n_cells, dtype=np.int32)
-    for i in range(n):
-        for j in range(m):
-            pi = bp[i, j, 0]
-            pj = bp[i, j, 1]
-            if pi >= 0 and pj >= 0:
-                parent = pi * m + pj
-                counts[parent] += 1
-
-    rev_offsets = np.empty(n_cells + 1, dtype=np.int32)
-    rev_offsets[0] = 0
-    for k in range(n_cells):
-        rev_offsets[k + 1] = rev_offsets[k] + counts[k]
-
-    n_edges = rev_offsets[n_cells]
-    rev_children = np.empty(n_edges, dtype=np.int32)
-    write = np.empty(n_cells, dtype=np.int32)
-    for k in range(n_cells):
-        write[k] = rev_offsets[k]
-
-    for i in range(n):
-        for j in range(m):
-            pi = bp[i, j, 0]
-            pj = bp[i, j, 1]
-            if pi >= 0 and pj >= 0:
-                parent = pi * m + pj
-                idx = write[parent]
-                rev_children[idx] = i * m + j
-                write[parent] = idx + 1
-
-    return rev_offsets, rev_children
-
-
-@njit
-def propagate_dist_from_masked_seeds(mask, dist, seed_masked, rev_offsets, rev_children, l_min, queue, touched_nodes, enqueued_stamp, touched_stamp, stamp):
-    n, m = mask.shape
-    cap = l_min + 1
-    q_read = 0
-    q_write = 0
-    touched_count = 0
-
-    for flat_idx64 in seed_masked:
-        flat_idx = np.int32(flat_idx64)
-        i = flat_idx // m
-        j = flat_idx - i * m
-        dist[i, j] = 0
-
-        if touched_stamp[flat_idx] != stamp:
-            touched_stamp[flat_idx] = stamp
-            touched_nodes[touched_count] = flat_idx
-            touched_count += 1
-
-        if enqueued_stamp[flat_idx] != stamp:
-            enqueued_stamp[flat_idx] = stamp
-            queue[q_write] = flat_idx
-            q_write += 1
-
-    while q_read < q_write:
-        parent = queue[q_read]
-        q_read += 1
-
-        pi = parent // m
-        pj = parent - pi * m
-        parent_dist = dist[pi, pj]
-
-        start = rev_offsets[parent]
-        end = rev_offsets[parent + 1]
-        for idx in range(start, end):
-            child = rev_children[idx]
-            ci = child // m
-            cj = child - ci * m
-
-            if mask[ci, cj]:
-                dist[ci, cj] = 0
-                continue
-
-            cand = parent_dist + 1
-            if cand > cap:
-                cand = cap
-
-            if cand < dist[ci, cj]:
-                dist[ci, cj] = cand
-                if touched_stamp[child] != stamp:
-                    touched_stamp[child] = stamp
-                    touched_nodes[touched_count] = child
-                    touched_count += 1
-
-                if cand < cap and enqueued_stamp[child] != stamp:
-                    enqueued_stamp[child] = stamp
-                    queue[q_write] = child
-                    q_write += 1
-
-    return touched_count
-
-
-@njit
-def mask_touched_below_threshold(mask, dist, touched_nodes, touched_count, l_min, forbidden, new_pending_dist_masked):
-    _, m = mask.shape
-    for t in range(touched_count):
-        flat_idx = touched_nodes[t]
-        i = flat_idx // m
-        j = flat_idx - i * m
-        if (not mask[i, j]) and dist[i, j] <= l_min:
-            mask[i, j] = True
-            dist[i, j] = 0
-            forbidden.add(np.int64(flat_idx))
-            new_pending_dist_masked.add(np.int64(flat_idx))
-
-
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
 def mask_vicinity(path, mask, vwidth=10):
     n, m = mask.shape
@@ -453,127 +325,45 @@ def update_dist(mask, dist, bp):
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], int32[:, :, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
-    n, m = csm.shape
-    n_cells = n * m
-    count = np.count_nonzero((csm == 0) | mask)
-    print("amount:", csm.size - count)
-    print("percentage:", 100.0 * count / csm.size)
-
     mask = mask | (csm <= 0)
-    dist = normalize_dist_clamped(mask, dist, l_min)
-    rev_offsets, rev_children = build_reverse_bp_graph(bp)
-
-    pending_dist_masked = set()
-    pending_dist_masked.add(np.int64(-1))
-    pending_dist_masked.remove(np.int64(-1))
-    pending_threshold_only = set()
-    pending_threshold_only.add(np.int64(-1))
-    pending_threshold_only.remove(np.int64(-1))
-    for i in range(n):
-        for j in range(m):
-            if mask[i, j]:
-                pending_dist_masked.add(np.int64(i * m + j))
-            elif dist[i, j] <= l_min:
-                pending_threshold_only.add(np.int64(i * m + j))
-
-    queue = np.empty(n_cells, dtype=np.int32)
-    touched_nodes = np.empty(n_cells, dtype=np.int32)
-    enqueued_stamp = np.zeros(n_cells, dtype=np.int32)
-    touched_stamp = np.zeros(n_cells, dtype=np.int32)
-    stamp = np.int32(1)
-
-    start_mask = (~mask) & (dist > l_min)
+    start_mask = ~mask
     pos_i, pos_j = np.nonzero(start_mask)
 
-    nnz = len(pos_i)
+    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
+    perm = np.argsort(values)
+    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
+
+    k_best = len(sorted_pos_i) - 1
     paths = []
-    if nnz == 0:
-        return paths
 
-    values = np.empty(nnz, dtype=np.float32)
-    for k in range(nnz):
-        values[k] = csm[pos_i[k], pos_j[k]]
+    while k_best >= 0:
 
-    dense_to_sparse = np.full(csm.size, -1, dtype=np.int32)
-    for sparse_idx in range(nnz):
-        dense_to_sparse[pos_i[sparse_idx] * m + pos_j[sparse_idx]] = sparse_idx
+        path = np.empty((0, 0), dtype=np.int32)
+        path_found = False
 
-    active_sparse = np.arange(nnz, dtype=np.int32)
-    sparse_to_active = np.arange(nnz, dtype=np.int32)
-    active_size = np.int32(nnz)
+        while not path_found:
 
-    while active_size > 0:
-        best_sparse_idx = argmax_active(values, active_sparse, active_size)
-        if best_sparse_idx < 0:
-            return paths
+            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
+                k_best -= 1
+                if k_best < 0:
+                    return paths
 
-        i_best = pos_i[best_sparse_idx]
-        j_best = pos_j[best_sparse_idx]
-        if i_best < 2 or j_best < 2:
-            active_size = deactivate_sparse_idx(best_sparse_idx, active_sparse, sparse_to_active, active_size)
-            continue
+            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
 
-        if warping:
-            path = best_path_warping(csm, mask, i_best, j_best)
-        else:
-            path = best_path_no_warping(csm, mask, i_best, j_best)
+            if i_best < 2 or j_best < 2:
+                return paths
 
-        forbidden = set()
-        forbidden.add(np.int64(-1))
-        forbidden.remove(np.int64(-1))
-        mask_vicinity_record(path, mask, 0, forbidden)
-        active_size = deactivate_forbidden(forbidden, dense_to_sparse, active_sparse, sparse_to_active, active_size)
+            if warping:
+                path = best_path_warping(csm, mask, i_best, j_best)
+            else:
+                path = best_path_no_warping(csm, mask, i_best, j_best)
 
-        if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-            forbidden_vicinity = set()
-            forbidden_vicinity.add(np.int64(-1))
-            forbidden_vicinity.remove(np.int64(-1))
-            mask_vicinity_record(path, mask, vwidth, forbidden_vicinity)
-            active_size = deactivate_forbidden(forbidden_vicinity, dense_to_sparse, active_sparse, sparse_to_active, active_size)
+            mask = mask_vicinity(path, mask, 0)
 
-            seed_masked = set()
-            seed_masked.add(np.int64(-1))
-            seed_masked.remove(np.int64(-1))
-            for flat_idx in pending_dist_masked:
-                seed_masked.add(flat_idx)
-            for flat_idx in forbidden:
-                seed_masked.add(flat_idx)
-            for flat_idx in forbidden_vicinity:
-                seed_masked.add(flat_idx)
+            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+                path_found = True
 
-            if stamp == np.int32(2147483647):
-                enqueued_stamp[:] = 0
-                touched_stamp[:] = 0
-                stamp = np.int32(1)
-
-            touched_count = propagate_dist_from_masked_seeds(mask, dist, seed_masked, rev_offsets, rev_children, l_min, queue, touched_nodes, enqueued_stamp, touched_stamp, stamp)
-            stamp = np.int32(stamp + 1)
-
-            forbidden_dist = set()
-            forbidden_dist.add(np.int64(-1))
-            forbidden_dist.remove(np.int64(-1))
-            new_pending_dist_masked = set()
-            new_pending_dist_masked.add(np.int64(-1))
-            new_pending_dist_masked.remove(np.int64(-1))
-            mask_touched_below_threshold(mask, dist, touched_nodes, touched_count, l_min, forbidden_dist, new_pending_dist_masked)
-            for flat_idx in pending_threshold_only:
-                idx = np.int32(flat_idx)
-                i = idx // m
-                j = idx - i * m
-                if not mask[i, j]:
-                    mask[i, j] = True
-                    dist[i, j] = 0
-                    forbidden_dist.add(flat_idx)
-                    new_pending_dist_masked.add(flat_idx)
-            pending_threshold_only = set()
-            pending_threshold_only.add(np.int64(-1))
-            pending_threshold_only.remove(np.int64(-1))
-            active_size = deactivate_forbidden(forbidden_dist, dense_to_sparse, active_sparse, sparse_to_active, active_size)
-            pending_dist_masked = new_pending_dist_masked
-
-            count = np.count_nonzero((csm == 0) | mask)
-            print("amount:", csm.size - count)
-            print("percentage:", 100.0 * count / csm.size)
-            paths.append(path)
+        mask = mask_vicinity(path, mask, vwidth)
+        paths.append(path)
 
     return paths
