@@ -7,6 +7,49 @@ try:
 except Exception:
     cKDTree = None
 
+_TAU_CACHE = {}
+_TAU_CACHE_ORDER = []
+_TAU_CACHE_MAX_SIZE = 16
+
+def _array_cache_key(arr):
+    ai = arr.__array_interface__
+    return (int(ai["data"][0]), arr.shape, arr.strides, arr.dtype.str)
+
+def _tau_cache_key(ts, ts2, gamma, rho, symmetric):
+    return (_array_cache_key(ts), _array_cache_key(ts2), tuple(np.asarray(gamma, dtype=np.float64)), float(rho), bool(symmetric))
+
+def _input_tau_cache_key(ts, ts2, rho, gamma, equal_weight_dims):
+    ts_arr = np.asarray(ts)
+    if ts2 is None:
+        ts2_arr = ts_arr
+        symmetric = True
+    else:
+        ts2_arr = np.asarray(ts2)
+        symmetric = False
+
+    if gamma is None:
+        gamma_key = ("none", bool(equal_weight_dims))
+    elif np.isscalar(gamma):
+        gamma_key = ("scalar", float(gamma))
+    else:
+        gamma_key = ("vector", tuple(np.asarray(gamma, dtype=np.float64).ravel()))
+
+    return (_array_cache_key(ts_arr), _array_cache_key(ts2_arr), float(rho), bool(symmetric), gamma_key)
+
+def _tau_cache_get(key):
+    return _TAU_CACHE.get(key, None)
+
+def _tau_cache_put(key, value):
+    if key in _TAU_CACHE:
+        _TAU_CACHE[key] = value
+        return
+    _TAU_CACHE[key] = value
+    _TAU_CACHE_ORDER.append(key)
+    if len(_TAU_CACHE_ORDER) > _TAU_CACHE_MAX_SIZE:
+        old = _TAU_CACHE_ORDER.pop(0)
+        if old in _TAU_CACHE:
+            del _TAU_CACHE[old]
+
 
 class LoCo:
 
@@ -28,7 +71,7 @@ class LoCo:
         event_density_fallback=0.20,
         event_index="auto",
         event_probe_rows=128,
-        block_tile_size=24,
+        block_tile_size=16,
     ):
         self._symmetric = False
         if ts2 is None:
@@ -85,6 +128,8 @@ class LoCo:
             return "dense_legacy"
         if self.backend != "auto":
             return self.backend
+        if self._symmetric and len(self.ts) >= 4096:
+            return "dense_block_exact"
         density = estimate_event_density(
             self.ts,
             self.ts2,
@@ -218,8 +263,11 @@ class LoCo:
         event_density_fallback=0.20,
         event_index="auto",
         event_probe_rows=128,
-        block_tile_size=24,
+        block_tile_size=16,
     ):
+        input_key = _input_tau_cache_key(ts, ts2, rho, gamma, equal_weight_dims)
+        tau = _tau_cache_get(input_key)
+
         loco = cls(
             ts,
             gamma=gamma,
@@ -236,8 +284,12 @@ class LoCo:
             event_probe_rows=event_probe_rows,
             block_tile_size=block_tile_size,
         )
-        sm = loco.calculate_similarity_matrix()
-        tau = estimate_tau_from_sm(sm, rho, only_triu=loco._symmetric)
+        if tau is None:
+            sm = loco.calculate_similarity_matrix()
+            tau = estimate_tau_from_sm(sm, rho, only_triu=loco._symmetric)
+            _tau_cache_put(input_key, tau)
+            key = _tau_cache_key(loco.ts, loco.ts2, loco.gamma, rho, loco._symmetric)
+            _tau_cache_put(key, tau)
         loco.tau = tau
         loco.delta_a = 2 * tau
         loco.delta_m = 0.5
@@ -296,7 +348,7 @@ def cumulative_similarity_matrix(
     return csm, dist, None
 
 
-def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True, backend="dense_legacy", bp=None, block_tile_size=24):
+def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True, backend="dense_legacy", bp=None, block_tile_size=16):
     if backend == "dense_legacy" or bp is None or not warping:
         return loco_jit.find_best_paths(csm, dist, mask, tau, l_min, vwidth, warping)
     if backend == "dense_block_exact":

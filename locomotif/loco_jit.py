@@ -7,19 +7,20 @@ from numba import njit, types
 from numba.types import List, Array
 from numba import prange
 
-@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
+@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32), parallel=True, fastmath=True)
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     n, m = len(ts1), len(ts2)
+    d = ts1.shape[1]
 
     sm = np.full((n, m), -np.inf, dtype=np.float32)
     for i in prange(n):
-
-        j_start = max(0, i-diag_offset) if only_triu else 0
-        j_end   = m
-        
-        similarities = np.exp(-np.sum(gamma.T * np.power(ts1[i, :] - ts2[j_start:j_end, :], 2), axis=1))
-        
-        sm[i, j_start:j_end] = similarities
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        for j in range(j_start, m):
+            acc = 0.0
+            for k in range(d):
+                diff = ts1[i, k] - ts2[j, k]
+                acc += gamma[k] * diff * diff
+            sm[i, j] = np.float32(np.exp(-acc))
 
     return sm
 
@@ -39,7 +40,7 @@ def max3(a, b, c):
 @njit(types.Tuple((
         types.float32[:, :], 
         types.int32[:, :],
-    ))(float32[:, :], int32, float64, float64, float64, boolean, int32))
+    ))(float32[:, :], int32, float64, float64, float64, boolean, int32), fastmath=True)
 def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
@@ -59,14 +60,20 @@ def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, del
             pred_left = csm[i + 1, j]
             pred_up = csm[i, j + 1]
 
-            pred_max = max3(pred_diag, pred_left, pred_up)
-
-            if pred_max == pred_diag:
-                pred_coord = (i+1, j+1)
-            elif pred_max == pred_left:
-                pred_coord = (i+1, j)
+            if pred_diag >= pred_left:
+                if pred_diag >= pred_up:
+                    pred_max = pred_diag
+                    pi, pj = i + 1, j + 1
+                else:
+                    pred_max = pred_up
+                    pi, pj = i, j + 1
             else:
-                pred_coord = (i, j+1)
+                if pred_left >= pred_up:
+                    pred_max = pred_left
+                    pi, pj = i + 1, j
+                else:
+                    pred_max = pred_up
+                    pi, pj = i, j + 1
             
             if sim < tau:
                 csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
@@ -75,7 +82,6 @@ def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, del
             
             cur = csm[i + 2, j + 2]
             if pred_max > 0 and cur > 0:
-                pi, pj = pred_coord
                 dist[i+2, j+2] = dist[pi, pj] + 1
 
     return csm, dist
@@ -84,7 +90,7 @@ def cumulative_similarity_matrix_warping(sm, l_min=10, tau=0.5, delta_a=1.0, del
         types.float32[:, :],
         types.int32[:, :],
         types.uint8[:, :],
-    ))(float32[:, :], int32, float64, float64, float64, boolean, int32))
+    ))(float32[:, :], int32, float64, float64, float64, boolean, int32), fastmath=True)
 def cumulative_similarity_matrix_warping_bp(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
@@ -105,22 +111,31 @@ def cumulative_similarity_matrix_warping_bp(sm, l_min=10, tau=0.5, delta_a=1.0, 
             pred_left = csm[i + 1, j]
             pred_up = csm[i, j + 1]
 
-            pred_max = max3(pred_diag, pred_left, pred_up)
-
-            if pred_max == pred_diag:
-                pred_coord = (i + 1, j + 1)
-            elif pred_max == pred_left:
-                pred_coord = (i + 1, j)
+            if pred_diag >= pred_left:
+                if pred_diag >= pred_up:
+                    pred_max = pred_diag
+                    pi, pj = i + 1, j + 1
+                else:
+                    pred_max = pred_up
+                    pi, pj = i, j + 1
             else:
-                pred_coord = (i, j + 1)
+                if pred_left >= pred_up:
+                    pred_max = pred_left
+                    pi, pj = i + 1, j
+                else:
+                    pred_max = pred_up
+                    pi, pj = i, j + 1
 
-            pred_path_max = max3(pred_diag, pred_up, pred_left)
-            if pred_path_max == pred_diag:
-                bp[i + 2, j + 2] = np.uint8(1)
-            elif pred_path_max == pred_up:
-                bp[i + 2, j + 2] = np.uint8(2)
+            if pred_diag >= pred_up:
+                if pred_diag >= pred_left:
+                    bp[i + 2, j + 2] = np.uint8(1)
+                else:
+                    bp[i + 2, j + 2] = np.uint8(3)
             else:
-                bp[i + 2, j + 2] = np.uint8(3)
+                if pred_up >= pred_left:
+                    bp[i + 2, j + 2] = np.uint8(2)
+                else:
+                    bp[i + 2, j + 2] = np.uint8(3)
             
             if sim < tau:
                 csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
@@ -129,7 +144,6 @@ def cumulative_similarity_matrix_warping_bp(sm, l_min=10, tau=0.5, delta_a=1.0, 
             
             cur = csm[i + 2, j + 2]
             if pred_max > 0 and cur > 0:
-                pi, pj = pred_coord
                 dist[i + 2, j + 2] = dist[pi, pj] + 1
             
     return csm, dist, bp
@@ -150,7 +164,7 @@ def decay_gap(value, gap, delta_m, delta_a):
 @njit(types.Tuple((
         types.float32[:, :], 
         types.int32[:, :],
-    ))(float32[:, :], int32, float64, float64, float64, boolean, int32, float64, int32, int32))
+    ))(float32[:, :], int32, float64, float64, float64, boolean, int32, float64, int32, int32), fastmath=True)
 def cumulative_similarity_matrix_warping_sparse(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, event_tau=0.0, max_gap=32, row_topk=64):
     n, m = sm.shape
 
@@ -221,7 +235,7 @@ def cumulative_similarity_matrix_warping_sparse(sm, l_min=10, tau=0.5, delta_a=1
 
     return csm, dist
 
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32), fastmath=True)
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
@@ -247,7 +261,7 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
         types.float32[:, :],
         types.int32[:, :],
         types.uint8[:, :],
-    ))(float32[:, :], float64, float64, float64, boolean, int32))
+    ))(float32[:, :], float64, float64, float64, boolean, int32), fastmath=True)
 def cumulative_similarity_matrix_no_warping_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
@@ -282,7 +296,7 @@ def cumulative_similarity_matrix_no_warping_bp(sm, tau=0.5, delta_a=1.0, delta_m
         types.float32[:, :],
         types.int32[:, :],
         types.uint8[:, :],
-    ))(int32, int32, int32[:], int32[:], float32[:], float64, float64, float64, boolean, int32, boolean))
+    ))(int32, int32, int32[:], int32[:], float32[:], float64, float64, float64, boolean, int32, boolean), fastmath=True)
 def cumulative_similarity_matrix_events_bp(n, m, row_ptr, col_idx, sim_vals, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, warping=True):
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     dist = np.zeros((n + 2, m + 2), dtype=np.int32)
@@ -309,21 +323,31 @@ def cumulative_similarity_matrix_events_bp(n, m, row_ptr, col_idx, sim_vals, tau
                 pred_left = csm[i + 1, j]
                 pred_up = csm[i, j + 1]
 
-                pred_max = max3(pred_diag, pred_left, pred_up)
-                if pred_max == pred_diag:
-                    pred_coord = (i + 1, j + 1)
-                elif pred_max == pred_left:
-                    pred_coord = (i + 1, j)
+                if pred_diag >= pred_left:
+                    if pred_diag >= pred_up:
+                        pred_max = pred_diag
+                        pi, pj = i + 1, j + 1
+                    else:
+                        pred_max = pred_up
+                        pi, pj = i, j + 1
                 else:
-                    pred_coord = (i, j + 1)
+                    if pred_left >= pred_up:
+                        pred_max = pred_left
+                        pi, pj = i + 1, j
+                    else:
+                        pred_max = pred_up
+                        pi, pj = i, j + 1
 
-                pred_path_max = max3(pred_diag, pred_up, pred_left)
-                if pred_path_max == pred_diag:
-                    bp[i + 2, j + 2] = np.uint8(1)
-                elif pred_path_max == pred_up:
-                    bp[i + 2, j + 2] = np.uint8(2)
+                if pred_diag >= pred_up:
+                    if pred_diag >= pred_left:
+                        bp[i + 2, j + 2] = np.uint8(1)
+                    else:
+                        bp[i + 2, j + 2] = np.uint8(3)
                 else:
-                    bp[i + 2, j + 2] = np.uint8(3)
+                    if pred_up >= pred_left:
+                        bp[i + 2, j + 2] = np.uint8(2)
+                    else:
+                        bp[i + 2, j + 2] = np.uint8(3)
 
                 if has_event:
                     cur = max(0, sim + pred_max)
@@ -332,7 +356,6 @@ def cumulative_similarity_matrix_events_bp(n, m, row_ptr, col_idx, sim_vals, tau
                 csm[i + 2, j + 2] = cur
 
                 if pred_max > 0 and cur > 0:
-                    pi, pj = pred_coord
                     dist[i + 2, j + 2] = dist[pi, pj] + 1
             else:
                 bp[i + 2, j + 2] = np.uint8(1)
@@ -676,8 +699,8 @@ def _heap3_push(values, cells, tiles, size, value, cell, tile):
         i = p
     return size
 
-@njit(types.Tuple((float32, int32))(float32[:, :], int32[:, :], boolean[:, :], int32, int32, int32, int32))
-def _tile_best_candidate(csm, dist, mask, l_min, tile, n_tile_cols, tile_size):
+@njit(types.Tuple((float32, int32))(float32[:, :], boolean[:, :], boolean[:, :], int32, int32, int32))
+def _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size):
     n_rows, n_cols = csm.shape
     tr = tile // n_tile_cols
     tc = tile - tr * n_tile_cols
@@ -695,11 +718,9 @@ def _tile_best_candidate(csm, dist, mask, l_min, tile, n_tile_cols, tile_size):
         for j in range(j_start, j_end):
             if mask[i, j]:
                 continue
-            if dist[i, j] < l_min:
+            if not eligible[i, j]:
                 continue
             value = csm[i, j]
-            if value <= 0:
-                continue
             cell = np.int32(base + j)
             if _pair_is_greater(value, cell, best_value, best_cell):
                 best_value = value
@@ -761,11 +782,12 @@ def find_best_paths_heap_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, war
 
     return paths
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], uint8[:, :], boolean[:, :], float32, int32, int32, boolean, int32))
+@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], uint8[:, :], boolean[:, :], float32, int32, int32, boolean, int32), fastmath=True)
 def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True, tile_size=64):
     mask = mask | (csm <= 0)
     if tile_size <= 0:
         tile_size = 64
+    eligible = (dist >= l_min) & (csm > 0)
 
     n_rows, n_cols = csm.shape
     n_tile_rows = (n_rows + tile_size - 1) // tile_size
@@ -778,7 +800,7 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
     size = np.int32(0)
 
     for tile in range(n_tiles):
-        value, cell = _tile_best_candidate(csm, dist, mask, l_min, tile, n_tile_cols, tile_size)
+        value, cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
         if cell >= 0:
             heap_values[size] = value
             heap_cells[size] = cell
@@ -799,7 +821,7 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
                     return paths
 
                 old_value, old_cell, tile, size = _heap3_pop_max(heap_values, heap_cells, heap_tiles, size)
-                cur_value, cur_cell = _tile_best_candidate(csm, dist, mask, l_min, tile, n_tile_cols, tile_size)
+                cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
 
                 if cur_cell < 0:
                     continue
@@ -831,7 +853,7 @@ def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, wa
             mask = mask_path(path, mask)
 
             if selected_tile >= 0:
-                push_value, push_cell = _tile_best_candidate(csm, dist, mask, l_min, selected_tile, n_tile_cols, tile_size)
+                push_value, push_cell = _tile_best_candidate(csm, eligible, mask, selected_tile, n_tile_cols, tile_size)
                 if push_cell >= 0:
                     size = _heap3_push(heap_values, heap_cells, heap_tiles, size, push_value, push_cell, selected_tile)
 

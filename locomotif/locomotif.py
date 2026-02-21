@@ -26,7 +26,7 @@ def apply_locomotif(
     event_density_fallback=0.20,
     event_index="auto",
     event_probe_rows=128,
-    block_tile_size=24,
+    block_tile_size=16,
 ):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -81,7 +81,7 @@ def get_locomotif_instance(
     event_density_fallback=0.20,
     event_index="auto",
     event_probe_rows=128,
-    block_tile_size=24,
+    block_tile_size=16,
 ):
     return LoCoMotif.instance_from_rho(
         ts,
@@ -121,7 +121,7 @@ class LoCoMotif:
         event_density_fallback=0.20,
         event_index="auto",
         event_probe_rows=128,
-        block_tile_size=24,
+        block_tile_size=16,
     ):
         self.ts = ts
         l_min = max(4, l_min)
@@ -163,7 +163,7 @@ class LoCoMotif:
         event_density_fallback=0.20,
         event_index="auto",
         event_probe_rows=128,
-        block_tile_size=24,
+        block_tile_size=16,
     ):
         # Handle default rho value
         if rho is None:
