@@ -175,6 +175,31 @@ class LoCo:
             )
             return self._csm
 
+        if backend == "sparse_event_graph":
+            row_ptr, col_idx, sim_vals = build_event_csr(
+                self.ts,
+                self.ts2,
+                self.gamma,
+                self.tau,
+                only_triu=self._symmetric,
+                diag_offset=0,
+                event_index=self.event_index,
+            )
+            self._csm, self._dist = loco_jit.cumulative_similarity_matrix_events_sparse(
+                np.int32(len(self.ts)),
+                np.int32(len(self.ts2)),
+                row_ptr,
+                col_idx,
+                sim_vals,
+                self.delta_a,
+                self.delta_m,
+                np.int32(self.sparse_max_gap),
+                self._symmetric,
+                0,
+            )
+            self._bp = None
+            return self._csm
+
         if self._sm is None:
             self.calculate_similarity_matrix()
         with_bp = backend != "dense_legacy" and self.warping

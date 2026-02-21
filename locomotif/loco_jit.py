@@ -371,6 +371,72 @@ def cumulative_similarity_matrix_events_bp(n, m, row_ptr, col_idx, sim_vals, tau
 
     return csm, dist, bp
 
+@njit(types.Tuple((
+        types.float32[:, :],
+        types.int32[:, :],
+    ))(int32, int32, int32[:], int32[:], float32[:], float64, float64, int32, boolean, int32), fastmath=True)
+def cumulative_similarity_matrix_events_sparse(n, m, row_ptr, col_idx, sim_vals, delta_a=1.0, delta_m=0.5, max_gap=32, only_triu=False, diag_offset=0):
+    csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
+
+    if max_gap < 1:
+        max_gap = 1
+
+    for i in range(n):
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        p = row_ptr[i]
+        p_end = row_ptr[i + 1]
+
+        while p < p_end:
+            j = col_idx[p]
+            if j < j_start:
+                p += 1
+                continue
+
+            sim = sim_vals[p]
+            p += 1
+
+            pred_max = 0.0
+            pred_dist = 0
+
+            upper_gap = max_gap
+            if i < upper_gap:
+                upper_gap = i
+            if j < upper_gap:
+                upper_gap = j
+
+            for gap in range(1, upper_gap + 1):
+                k = gap - 1
+
+                v_diag = csm[i - gap + 2, j - gap + 2]
+                if v_diag > 0:
+                    cand = decay_gap(v_diag, k, delta_m, delta_a)
+                    if cand > pred_max:
+                        pred_max = cand
+                        pred_dist = dist[i - gap + 2, j - gap + 2] + gap
+
+                v_left = csm[i + 2, j - gap + 2]
+                if v_left > 0:
+                    cand = decay_gap(v_left, k, delta_m, delta_a)
+                    if cand > pred_max:
+                        pred_max = cand
+                        pred_dist = dist[i + 2, j - gap + 2] + gap
+
+                v_up = csm[i - gap + 2, j + 2]
+                if v_up > 0:
+                    cand = decay_gap(v_up, k, delta_m, delta_a)
+                    if cand > pred_max:
+                        pred_max = cand
+                        pred_dist = dist[i - gap + 2, j + 2] + gap
+
+            cur = sim + pred_max
+            if cur > 0:
+                csm[i + 2, j + 2] = cur
+                if pred_max > 0:
+                    dist[i + 2, j + 2] = pred_dist
+
+    return csm, dist
+
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32, int32))
 def best_path_warping(csm, mask, i, j, max_len):
