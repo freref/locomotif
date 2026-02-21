@@ -73,7 +73,11 @@ class LoCo:
         mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
             # First, mask region around the diagional as if the diagonal is already found as a path.
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+            n_rows, n_cols = mask.shape
+            for i in range(n_rows):
+                j_start = i + vwidth + 1
+                if j_start < n_cols:
+                    mask[i, j_start:] = False
 
         paths = find_best_paths(self._csm, self._dist, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
         paths = [path-2 for path in paths]
@@ -101,7 +105,13 @@ class LoCo:
 # Calculate the similarity threshold tau as the rho-quantile of the similarity matrix.
 def estimate_tau_from_sm(sm, rho, only_triu=False):
     if only_triu:
-        tau = np.quantile(sm[np.triu_indices(len(sm))], rho, axis=None)
+        if sm.size == 1:
+            return sm[0, 0]
+        n = sm.shape[0]
+        valid_count = n * (n + 1) // 2
+        invalid_count = sm.size - valid_count
+        adjusted_rho = (invalid_count + rho * (valid_count - 1)) / (sm.size - 1)
+        tau = np.quantile(sm, adjusted_rho, axis=None)
     else:
         tau = np.quantile(sm, rho, axis=None)
     return tau

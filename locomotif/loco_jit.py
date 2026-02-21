@@ -103,47 +103,130 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     return csm
 
 
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_warping(csm, mask, i, j):
-    
-    path = []
-    while i >= 2 and j >= 2:
+@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32, int32))
+def best_path_warping(csm, mask, i, j, max_len):
+    path_rev = np.empty((max_len, 2), dtype=np.int32)
+    path_len = 0
 
-        path.append((i, j))
+    while i >= 2 and j >= 2 and path_len < max_len:
+        path_rev[path_len, 0] = i
+        path_rev[path_len, 1] = j
+        path_len += 1
 
-        maximum = max3(csm[i - 1, j - 1], csm[i - 2, j - 1], csm[i - 1, j - 2])
+        pred_diag = csm[i - 1, j - 1]
+        pred_left = csm[i - 2, j - 1]
+        pred_up = csm[i - 1, j - 2]
+        maximum = max3(pred_diag, pred_left, pred_up)
 
-        if csm[i - 1, j - 1] == maximum:
-            if mask[i - 1, j - 1]:
-                break
-            i, j = i - 1, j - 1
-        elif csm[i - 2, j - 1] == maximum:
-            if mask[i - 2, j - 1]:
-                break
-            i, j = i - 2, j - 1
+        if pred_diag == maximum:
+            ni, nj = i - 1, j - 1
+        elif pred_left == maximum:
+            ni, nj = i - 2, j - 1
         else:
-            if mask[i - 1, j - 2]:
-                break
-            i, j = i - 1, j - 2
+            ni, nj = i - 1, j - 2
 
-    path.reverse()
-    return np.array(path, dtype=np.int32)
+        if mask[ni, nj]:
+            break
 
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_no_warping(csm, mask, i, j):
-    
-    path = []
-    while i >= 2 and j >= 2:
+        i, j = ni, nj
 
-        path.append((i, j))
+    path = np.empty((path_len, 2), dtype=np.int32)
+    for k in range(path_len):
+        path[k, 0] = path_rev[path_len - 1 - k, 0]
+        path[k, 1] = path_rev[path_len - 1 - k, 1]
+    return path
+
+@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32, int32))
+def best_path_no_warping(csm, mask, i, j, max_len):
+    path_rev = np.empty((max_len, 2), dtype=np.int32)
+    path_len = 0
+
+    while i >= 2 and j >= 2 and path_len < max_len:
+        path_rev[path_len, 0] = i
+        path_rev[path_len, 1] = j
+        path_len += 1
 
         if mask[i - 1, j - 1]:
             break
 
         i, j = i - 1, j - 1
 
-    path.reverse()
-    return np.array(path, dtype=np.int32)
+    path = np.empty((path_len, 2), dtype=np.int32)
+    for k in range(path_len):
+        path[k, 0] = path_rev[path_len - 1 - k, 0]
+        path[k, 1] = path_rev[path_len - 1 - k, 1]
+    return path
+
+
+@njit(boolean[:, :](int32[:, :], boolean[:, :]))
+def mask_path(path, mask):
+    for k in range(len(path)-1):
+        ic, jc = path[k]
+        it, jt = path[k + 1]
+        mask[ic, jc] = True
+
+        di, dj = (it - ic, jt - jc)
+        if di == 2 and dj == 1:
+            mask[ic + 1, jc] = True
+        elif di == 1 and dj == 2:
+            mask[ic, jc + 1] = True
+        elif not (di == 1 and dj == 1):
+            raise Exception("Path does not comply to the allowed step sizes")
+
+    ic, jc = path[-1]
+    mask[ic, jc] = True
+    return mask
+
+
+@njit(int32[:](float32[:], int32))
+def bucket_order(values, n_bins):
+    n = len(values)
+    order = np.empty(n, dtype=np.int32)
+    if n == 0:
+        return order
+
+    vmin = values[0]
+    vmax = values[0]
+    for i in range(1, n):
+        v = values[i]
+        if v < vmin:
+            vmin = v
+        if v > vmax:
+            vmax = v
+
+    if vmax <= vmin:
+        for i in range(n):
+            order[i] = i
+        return order
+
+    counts = np.zeros(n_bins, dtype=np.int32)
+    scale = (n_bins - 1.0) / (vmax - vmin)
+
+    for i in range(n):
+        b = int((values[i] - vmin) * scale)
+        if b < 0:
+            b = 0
+        elif b >= n_bins:
+            b = n_bins - 1
+        counts[b] += 1
+
+    offsets = np.empty(n_bins, dtype=np.int32)
+    total = 0
+    for b in range(n_bins):
+        offsets[b] = total
+        total += counts[b]
+
+    for i in range(n):
+        b = int((values[i] - vmin) * scale)
+        if b < 0:
+            b = 0
+        elif b >= n_bins:
+            b = n_bins - 1
+        pos = offsets[b]
+        order[pos] = i
+        offsets[b] = pos + 1
+
+    return order
 
 
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
@@ -185,49 +268,50 @@ def mask_vicinity(path, mask, vwidth=10):
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
-    # Mask all zeros
     mask = mask | (csm <= 0)
-    
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    # start_mask = (~mask) # & (csm >= tau * min_path_length)
-    
-    start_mask = (~mask) & (dist >= l_min)
-    pos_i, pos_j = np.nonzero(start_mask)
-    
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
 
-    k_best = len(sorted_pos_i) - 1
+    start_mask = (~mask) & (dist >= l_min)
+    sorted_pos = np.flatnonzero(start_mask).astype(np.int32)
     paths = []
+    if len(sorted_pos) == 0:
+        return paths
+
+    values = csm.ravel()[sorted_pos]
+    order = bucket_order(values, 1 << 20)
+    k_best = len(order) - 1
+
+    n_cols = csm.shape[1]
 
     while k_best >= 0:
-
-        path = np.empty((0, 0), dtype=np.int32)
         path_found = False
 
         while not path_found:
-
-            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
-                k_best -= 1
+            while True:
                 if k_best < 0:
                     return paths
-                
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+                local_k = order[k_best]
+                k_best -= 1
+                candidate = sorted_pos[local_k]
+                i_best = np.int32(candidate // n_cols)
+                j_best = np.int32(candidate - i_best * n_cols)
+                if not mask[i_best, j_best]:
+                    break
 
             if i_best < 2 or j_best < 2:
                 return paths
-            
+
             if warping:
-                path = best_path_warping(csm, mask, i_best, j_best)
+                path = best_path_warping(csm, mask, i_best, j_best, dist[i_best, j_best] + 1)
             else:
-                path = best_path_no_warping(csm, mask, i_best, j_best)
-                
-            mask = mask_vicinity(path, mask, 0)
-            # mask = mask_path(path, mask)
-            
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+                max_len = i_best
+                if j_best < max_len:
+                    max_len = j_best
+                path = best_path_no_warping(csm, mask, i_best, j_best, max_len - 1)
+
+            if (path[-1, 0] - path[0, 0] + 1) >= l_min or (path[-1, 1] - path[0, 1] + 1) >= l_min:
                 path_found = True
+            else:
+                mask = mask_path(path, mask)
 
 
         mask = mask_vicinity(path, mask, vwidth)
