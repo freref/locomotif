@@ -99,12 +99,9 @@ def cumulative_similarity_matrix_warping_bp(sm, l_min=10, tau=0.5, delta_a=1.0, 
     bp = np.zeros((n + 2, m + 2), dtype=np.uint8)
 
     for i in range(n):
+        j_start = max(0, i - diag_offset) if only_triu else 0
 
-        j_start = max(0, i-diag_offset) if only_triu else 0
-        j_end = m
-
-        for j in range(j_start, j_end):
-
+        for j in range(j_start, m):
             sim = sm[i, j]
 
             pred_diag = csm[i + 1, j + 1]
@@ -136,13 +133,17 @@ def cumulative_similarity_matrix_warping_bp(sm, l_min=10, tau=0.5, delta_a=1.0, 
                     bp[i + 2, j + 2] = np.uint8(2)
                 else:
                     bp[i + 2, j + 2] = np.uint8(3)
-            
+
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * pred_max - delta_a)
+                cur = delta_m * pred_max - delta_a
+                if cur <= 0:
+                    cur = 0.0
             else:
-                csm[i + 2, j + 2] = max(0, sim + pred_max)
-            
-            cur = csm[i + 2, j + 2]
+                cur = sim + pred_max
+                if cur <= 0:
+                    cur = 0.0
+
+            csm[i + 2, j + 2] = cur
             if pred_max > 0 and cur > 0:
                 dist[i + 2, j + 2] = dist[pi, pj] + 1
             
