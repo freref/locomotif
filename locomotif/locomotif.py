@@ -73,15 +73,6 @@ def apply_locomotif(
     end_mask=None,
     overlap=0.0,
     warping=True,
-    sparse_events=False,
-    sparse_event_tau=None,
-    sparse_max_gap=8,
-    sparse_row_topk=64,
-    backend="auto",
-    event_density_fallback=0.20,
-    event_index="auto",
-    event_probe_rows=128,
-    block_tile_size=16,
 ):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -97,25 +88,14 @@ def apply_locomotif(
     
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
     """   
-    # Get a locomotif instance
     lcm = get_locomotif_instance(
         ts,
         l_min,
         l_max,
         rho=rho,
         warping=warping,
-        sparse_events=sparse_events,
-        sparse_event_tau=sparse_event_tau,
-        sparse_max_gap=sparse_max_gap,
-        sparse_row_topk=sparse_row_topk,
-        backend=backend,
-        event_density_fallback=event_density_fallback,
-        event_index=event_index,
-        event_probe_rows=event_probe_rows,
-        block_tile_size=block_tile_size,
     )
     lcm.find_best_paths(vwidth=l_min // 2)
-    # Find the `nb` best motif sets
     motif_sets = []
     for representative, motif_set, _ in lcm.find_best_motif_sets(nb=nb, overlap=overlap, start_mask=start_mask, end_mask=end_mask):
         motif_sets.append((representative, motif_set))
@@ -127,15 +107,6 @@ def get_locomotif_instance(
     l_max,
     rho=None,
     warping=True,
-    sparse_events=False,
-    sparse_event_tau=None,
-    sparse_max_gap=8,
-    sparse_row_topk=64,
-    backend="auto",
-    event_density_fallback=0.20,
-    event_index="auto",
-    event_probe_rows=128,
-    block_tile_size=16,
 ):
     return LoCoMotif.instance_from_rho(
         ts,
@@ -143,15 +114,6 @@ def get_locomotif_instance(
         l_max=l_max,
         rho=rho,
         warping=warping,
-        sparse_events=sparse_events,
-        sparse_event_tau=sparse_event_tau,
-        sparse_max_gap=sparse_max_gap,
-        sparse_row_topk=sparse_row_topk,
-        backend=backend,
-        event_density_fallback=event_density_fallback,
-        event_index=event_index,
-        event_probe_rows=event_probe_rows,
-        block_tile_size=block_tile_size,
     )
 
 
@@ -167,21 +129,11 @@ class LoCoMotif:
         delta_a=1.0,
         delta_m=0.5,
         warping=True,
-        sparse_events=False,
-        sparse_event_tau=None,
-        sparse_max_gap=8,
-        sparse_row_topk=64,
-        backend="auto",
-        event_density_fallback=0.20,
-        event_index="auto",
-        event_probe_rows=128,
-        block_tile_size=16,
     ):
         self.ts = ts
         l_min = max(4, l_min)
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
-        # LoCo instance
         self._loco = loco.LoCo(
             ts,
             gamma=gamma,
@@ -189,15 +141,6 @@ class LoCoMotif:
             delta_a=delta_a,
             delta_m=delta_m,
             warping=warping,
-            sparse_events=sparse_events,
-            sparse_event_tau=sparse_event_tau,
-            sparse_max_gap=sparse_max_gap,
-            sparse_row_topk=sparse_row_topk,
-            backend=backend,
-            event_density_fallback=event_density_fallback,
-            event_index=event_index,
-            event_probe_rows=event_probe_rows,
-            block_tile_size=block_tile_size,
         )
         self._paths = None
         self._paths_soa = None
@@ -210,47 +153,19 @@ class LoCoMotif:
         l_max,
         rho=None,
         warping=True,
-        sparse_events=False,
-        sparse_event_tau=None,
-        sparse_max_gap=8,
-        sparse_row_topk=64,
-        backend="auto",
-        event_density_fallback=0.20,
-        event_index="auto",
-        event_probe_rows=128,
-        block_tile_size=16,
     ):
-        # Handle default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5  
         lcm = cls(
             ts=ts,
             l_min=l_min,
             l_max=l_max,
-            sparse_events=sparse_events,
-            sparse_event_tau=sparse_event_tau,
-            sparse_max_gap=sparse_max_gap,
-            sparse_row_topk=sparse_row_topk,
-            backend=backend,
-            event_density_fallback=event_density_fallback,
-            event_index=event_index,
-            event_probe_rows=event_probe_rows,
-            block_tile_size=block_tile_size,
         )
         lcm._loco = loco.LoCo.instance_from_rho(
             ts,
             rho,
             gamma=None,
             warping=warping,
-            sparse_events=sparse_events,
-            sparse_event_tau=sparse_event_tau,
-            sparse_max_gap=sparse_max_gap,
-            sparse_row_topk=sparse_row_topk,
-            backend=backend,
-            event_density_fallback=event_density_fallback,
-            event_index=event_index,
-            event_probe_rows=event_probe_rows,
-            block_tile_size=block_tile_size,
         )
         return lcm
 
