@@ -128,21 +128,7 @@ class LoCo:
             return "dense_legacy"
         if self.backend != "auto":
             return self.backend
-        if self._symmetric and len(self.ts) >= 4096:
-            return "dense_block_exact"
-        density = estimate_event_density(
-            self.ts,
-            self.ts2,
-            self.gamma,
-            self.tau,
-            only_triu=self._symmetric,
-            diag_offset=0,
-            probe_rows=self.event_probe_rows,
-            event_index=self.event_index,
-        )
-        if self.warping and density < self.event_density_fallback and density < 0.05:
-            return "event_exact"
-        return "dense_block_exact"
+        return "nosort_frontier_exact"
 
     def calculate_cumulative_similarity_matrix(self):
         backend = self._choose_backend()
@@ -353,6 +339,8 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True, back
         return loco_jit.find_best_paths(csm, dist, mask, tau, l_min, vwidth, warping)
     if backend == "dense_block_exact":
         return loco_jit.find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min, vwidth, warping, np.int32(block_tile_size))
+    if backend == "nosort_frontier_exact" or backend == "dense_frontier_exact":
+        return loco_jit.find_best_paths_row_frontier_exact(csm, dist, bp, mask, tau, l_min, vwidth, warping)
     return loco_jit.find_best_paths_bp_sorted(csm, dist, bp, mask, tau, l_min, vwidth, warping)
 
 
