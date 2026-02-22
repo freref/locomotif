@@ -200,6 +200,7 @@ class LoCoMotif:
             block_tile_size=block_tile_size,
         )
         self._paths = None
+        self._paths_soa = None
 
     @classmethod
     def instance_from_rho(
@@ -266,6 +267,7 @@ class LoCoMotif:
             self._paths = _build_paths_with_sm(raw_paths, sm)
         else:
             self._paths = _build_paths_with_ts(raw_paths, self._loco.ts, self._loco.ts2, self._loco.gamma)
+        self._paths_soa = None
         return self._paths
 
     def induced_paths(self, b, e, mask=None):
@@ -277,6 +279,8 @@ class LoCoMotif:
     def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
         if self._paths is None:
             self.find_best_paths()
+        if not keep_fitnesses and self._paths_soa is None:
+            self._paths_soa = _build_paths_soa(self._paths)
             
         n = np.int32(len(self.ts))
         # Handle masks
@@ -301,12 +305,58 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
 
-            (b, e), best_fitness, fitnesses = _find_best_candidate(self._paths, n, self.l_min, self.l_max, overlap_f32, mask, mask, start_mask, end_mask, keep_fitnesses=keep_fitnesses)
+            if keep_fitnesses:
+                (b, e), best_fitness, fitnesses = _find_best_candidate(
+                    self._paths,
+                    n,
+                    self.l_min,
+                    self.l_max,
+                    overlap_f32,
+                    mask,
+                    mask,
+                    start_mask,
+                    end_mask,
+                    keep_fitnesses=True,
+                )
+            else:
+                b, e, best_fitness = _find_best_candidate_soa(
+                    n,
+                    self.l_min,
+                    self.l_max,
+                    overlap_f32,
+                    mask,
+                    mask,
+                    start_mask,
+                    end_mask,
+                    self._paths_soa[0],
+                    self._paths_soa[1],
+                    self._paths_soa[2],
+                    self._paths_soa[3],
+                    self._paths_soa[4],
+                    self._paths_soa[5],
+                    self._paths_soa[6],
+                    self._paths_soa[7],
+                )
+                fitnesses = np.empty((0, 5), dtype=np.float32)
 
             if best_fitness == 0.0:
                 break
 
-            motif_set = [project_to_vertical_axis(induced_path) for induced_path in self.induced_paths(b, e, mask)]
+            if self._paths_soa is not None:
+                segments = _induced_segments_soa(
+                    b,
+                    e,
+                    mask,
+                    self._paths_soa[0],
+                    self._paths_soa[1],
+                    self._paths_soa[2],
+                    self._paths_soa[3],
+                    self._paths_soa[4],
+                    self._paths_soa[5],
+                )
+                motif_set = [(segments[i, 0], segments[i, 1]) for i in range(len(segments))]
+            else:
+                motif_set = [project_to_vertical_axis(induced_path) for induced_path in self.induced_paths(b, e, mask)]
             mask = _mask_motif_set(mask, motif_set, overlap)
 
             current_nb += 1
@@ -341,6 +391,60 @@ def _induced_paths(b, e, mask, P):
         if not np.any(mask[b_m:e_m]):
             induced_paths.append(induced_path)
     return induced_paths
+
+
+def _build_paths_soa(P):
+    return _build_paths_soa_numba(P)
+
+
+@njit(cache=True)
+def _build_paths_soa_numba(P):
+    n_paths = len(P)
+    j1s = np.empty(n_paths, dtype=np.int32)
+    jls = np.empty(n_paths, dtype=np.int32)
+
+    index_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    path_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    csum_offsets = np.empty(n_paths + 1, dtype=np.int32)
+
+    index_offsets[0] = 0
+    path_offsets[0] = 0
+    csum_offsets[0] = 0
+
+    for i in range(n_paths):
+        path = P[i]
+        j1s[i] = path.j1
+        jls[i] = path.jl
+        index_offsets[i + 1] = index_offsets[i] + len(path.index_j)
+        path_offsets[i + 1] = path_offsets[i] + len(path.path)
+        csum_offsets[i + 1] = csum_offsets[i] + len(path.cumulative_similarities)
+
+    index_values = np.empty(index_offsets[-1], dtype=np.int32)
+    path_rows = np.empty(path_offsets[-1], dtype=np.int32)
+    csum_values = np.empty(csum_offsets[-1], dtype=np.float32)
+
+    for i in range(n_paths):
+        path = P[i]
+        i0, i1 = index_offsets[i], index_offsets[i + 1]
+        p0, p1 = path_offsets[i], path_offsets[i + 1]
+        s0, s1 = csum_offsets[i], csum_offsets[i + 1]
+        for t in range(i1 - i0):
+            index_values[i0 + t] = path.index_j[t]
+        for t in range(p1 - p0):
+            path_rows[p0 + t] = path.path[t, 0]
+        for t in range(s1 - s0):
+            csum_values[s0 + t] = path.cumulative_similarities[t]
+
+    return (
+        np.ascontiguousarray(j1s),
+        np.ascontiguousarray(jls),
+        np.ascontiguousarray(index_offsets),
+        np.ascontiguousarray(index_values),
+        np.ascontiguousarray(path_offsets),
+        np.ascontiguousarray(path_rows),
+        np.ascontiguousarray(csum_offsets),
+        np.ascontiguousarray(csum_values),
+    )
 
 from numba.experimental import jitclass
 @jitclass([
@@ -436,6 +540,8 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
     es_checked = np.zeros(max_size, dtype=np.int32)
     kb_by_path = np.zeros(max_size, dtype=np.int32)
     b_by_path = np.zeros(max_size, dtype=np.int32)
+    ub_length_by_path = np.zeros(max_size, dtype=np.float32)
+    ub_path_len_by_path = np.zeros(max_size, dtype=np.float32)
 
     row_prefix = np.zeros(r + 1, dtype=np.int32)
     for idx in range(r):
@@ -461,21 +567,46 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
 
         Pe[:nb_paths] = True
         es_checked[:nb_paths] = Pb.keys[:nb_paths]
+        e_start = b_repr + l_min
+        e_stop = min(c + 1, b_repr + l_max + 1)
+        use_bb = best_fitness > 0.0 and nb_paths >= 32 and (e_stop - e_start) >= 16
+
+        ub_total_length = 0.0
+        ub_total_path_length = 0.0
         for k in range(nb_paths):
             path = P[Pb.path_indices[k]]
             kb = path.index_j[b_repr - path.j1]
             kb_by_path[k] = kb
             b_by_path[k] = path.path[kb, 0]
+            if use_bb:
+                ub_len = path.path[-1, 0] + 1 - b_by_path[k]
+                ub_plen = len(path.path) - kb
+                ub_length_by_path[k] = ub_len
+                ub_path_len_by_path[k] = ub_plen
+                ub_total_length += ub_len
+                ub_total_path_length += ub_plen
 
         nb_remaining_paths = nb_paths
 
-        for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
+        for e_repr in range(e_start, e_stop):
 
             if col_mask[e_repr-1]:
                 break
 
             if not end_mask[e_repr-1]:
                 continue
+
+            if use_bb:
+                l_repr = e_repr - b_repr
+                ub_cov = (ub_total_length - l_repr) / float(n)
+                if ub_cov <= 0.0:
+                    break
+                ub_score = 1.0 - (l_repr / ub_total_path_length)
+                if ub_score <= 0.0:
+                    break
+                ub_fit = 2.0 * (ub_cov * ub_score) / (ub_cov + ub_score)
+                if ub_fit <= best_fitness:
+                    break
 
             score = 0.0
             total_length = 0.0
@@ -497,6 +628,9 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
                 if path.jl < e_repr:
                     Pe[k] = False
                     nb_remaining_paths -= 1
+                    if use_bb:
+                        ub_total_length -= ub_length_by_path[k]
+                        ub_total_path_length -= ub_path_len_by_path[k]
                     continue
 
                 kb = kb_by_path[k]
@@ -507,6 +641,9 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
                 if row_prefix[e] > row_prefix[es_checked[k]]:
                     Pe[k] = False
                     nb_remaining_paths -= 1
+                    if use_bb:
+                        ub_total_length -= ub_length_by_path[k]
+                        ub_total_path_length -= ub_path_len_by_path[k]
                     continue
                 es_checked[k] = e
 
@@ -559,3 +696,242 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
     fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
 
     return best_candidate, best_fitness, fitnesses
+
+
+@njit(cache=True)
+def _find_best_candidate_soa(
+    n,
+    l_min,
+    l_max,
+    nu,
+    row_mask,
+    col_mask,
+    start_mask,
+    end_mask,
+    j1s,
+    jls,
+    index_offsets,
+    index_values,
+    path_offsets,
+    path_rows,
+    csum_offsets,
+    csum_values,
+):
+    c = len(col_mask)
+    n_paths_total = len(j1s)
+    if n_paths_total == 0:
+        return np.int32(0), np.int32(0), np.float32(0.0)
+
+    row_prefix = np.zeros(len(row_mask) + 1, dtype=np.int32)
+    for idx in range(len(row_mask)):
+        row_prefix[idx + 1] = row_prefix[idx] + (1 if row_mask[idx] else 0)
+
+    col_prefix = np.zeros(c + 1, dtype=np.int32)
+    for idx in range(c):
+        col_prefix[idx + 1] = col_prefix[idx] + (1 if col_mask[idx] else 0)
+
+    q_order = np.argsort(j1s).astype(np.int32)
+    active_keys = np.empty(n_paths_total, dtype=np.int32)
+    active_paths = np.empty(n_paths_total, dtype=np.int32)
+    active_size = np.int32(0)
+    q = np.int32(0)
+
+    Pe = np.zeros(n_paths_total, dtype=np.bool_)
+    es_checked = np.zeros(n_paths_total, dtype=np.int32)
+    kb_by_path = np.zeros(n_paths_total, dtype=np.int32)
+    b_by_path = np.zeros(n_paths_total, dtype=np.int32)
+    ub_length_by_path = np.zeros(n_paths_total, dtype=np.int32)
+    ub_path_len_by_path = np.zeros(n_paths_total, dtype=np.int32)
+
+    best_b = np.int32(0)
+    best_e = np.int32(0)
+    best_fitness = 0.0
+
+    for b_repr in range(c - l_min + 1):
+        new_size = np.int32(0)
+        for old_k in range(active_size):
+            path_index = active_paths[old_k]
+            if jls[path_index] != b_repr:
+                active_keys[new_size] = active_keys[old_k]
+                active_paths[new_size] = path_index
+                new_size += 1
+        active_size = new_size
+
+        for k in range(active_size):
+            path_index = active_paths[k]
+            idx0 = index_offsets[path_index]
+            kb = index_values[idx0 + (b_repr - j1s[path_index])]
+            active_keys[k] = path_rows[path_offsets[path_index] + kb]
+
+        while q < n_paths_total:
+            path_index = q_order[q]
+            if j1s[path_index] != b_repr:
+                break
+            idx0 = index_offsets[path_index]
+            kb = index_values[idx0 + (b_repr - j1s[path_index])]
+            key = path_rows[path_offsets[path_index] + kb]
+            pos = np.searchsorted(active_keys[:active_size], key)
+            if pos < active_size:
+                active_keys[pos + 1 : active_size + 1] = active_keys[pos:active_size]
+                active_paths[pos + 1 : active_size + 1] = active_paths[pos:active_size]
+            active_keys[pos] = key
+            active_paths[pos] = path_index
+            active_size += 1
+            q += 1
+
+        nb_paths = active_size
+        if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
+            continue
+        if col_prefix[b_repr + l_min - 1] > col_prefix[b_repr]:
+            continue
+
+        Pe[:nb_paths] = True
+        es_checked[:nb_paths] = active_keys[:nb_paths]
+        e_start = b_repr + l_min
+        e_stop = min(c + 1, b_repr + l_max + 1)
+        use_bb = best_fitness > 0.0 and nb_paths >= 32 and (e_stop - e_start) >= 16
+
+        ub_total_length = 0.0
+        ub_total_path_length = 0.0
+        for k in range(nb_paths):
+            path_index = active_paths[k]
+            j1 = j1s[path_index]
+            idx0 = index_offsets[path_index]
+            p0 = path_offsets[path_index]
+            p1 = path_offsets[path_index + 1]
+            kb = index_values[idx0 + (b_repr - j1)]
+            kb_by_path[k] = kb
+            b = path_rows[p0 + kb]
+            b_by_path[k] = b
+            if use_bb:
+                ub_len = path_rows[p1 - 1] + 1 - b
+                ub_plen = p1 - p0 - kb
+                ub_length_by_path[k] = ub_len
+                ub_path_len_by_path[k] = ub_plen
+                ub_total_length += ub_len
+                ub_total_path_length += ub_plen
+
+        nb_remaining_paths = nb_paths
+
+        for e_repr in range(e_start, e_stop):
+            if col_mask[e_repr - 1]:
+                break
+            if not end_mask[e_repr - 1]:
+                continue
+
+            if use_bb:
+                l_repr = e_repr - b_repr
+                ub_cov = (ub_total_length - l_repr) / float(n)
+                if ub_cov <= 0.0:
+                    break
+                ub_score = 1.0 - (l_repr / ub_total_path_length)
+                if ub_score <= 0.0:
+                    break
+                ub_fit = 2.0 * (ub_cov * ub_score) / (ub_cov + ub_score)
+                if ub_fit <= best_fitness:
+                    break
+
+            score = 0.0
+            total_length = 0.0
+            total_path_length = 0.0
+            total_overlap = 0.0
+            l_prev = 0
+            e_prev = 0
+            too_much_overlap = False
+
+            for k in range(nb_paths):
+                if nb_remaining_paths < 2:
+                    break
+                if not Pe[k]:
+                    continue
+
+                path_index = active_paths[k]
+                if jls[path_index] < e_repr:
+                    Pe[k] = False
+                    nb_remaining_paths -= 1
+                    if use_bb:
+                        ub_total_length -= ub_length_by_path[k]
+                        ub_total_path_length -= ub_path_len_by_path[k]
+                    continue
+
+                j1 = j1s[path_index]
+                idx0 = index_offsets[path_index]
+                p0 = path_offsets[path_index]
+                c0 = csum_offsets[path_index]
+
+                kb = kb_by_path[k]
+                b = b_by_path[k]
+                ke = index_values[idx0 + (e_repr - 1 - j1)]
+                e = path_rows[p0 + ke] + 1
+
+                if row_prefix[e] > row_prefix[es_checked[k]]:
+                    Pe[k] = False
+                    nb_remaining_paths -= 1
+                    if use_bb:
+                        ub_total_length -= ub_length_by_path[k]
+                        ub_total_path_length -= ub_path_len_by_path[k]
+                    continue
+                es_checked[k] = e
+
+                l = e - b
+                if k > 0:
+                    overlap = max(0, e_prev - b)
+                    if nu * min(l, l_prev) < overlap:
+                        too_much_overlap = True
+                        break
+                    total_overlap += overlap
+
+                total_length += l
+                total_path_length += ke - kb + 1
+                score += csum_values[c0 + ke + 1] - csum_values[c0 + kb]
+
+                l_prev = l
+                e_prev = e
+
+            if nb_remaining_paths < 2:
+                break
+            if too_much_overlap:
+                continue
+
+            l_repr = e_repr - b_repr
+            n_score = (score - l_repr) / total_path_length
+            n_coverage = (total_length - total_overlap - l_repr) / float(n)
+
+            fit = 0.0
+            if n_coverage != 0 or n_score != 0:
+                fit = 2 * (n_coverage * n_score) / (n_coverage + n_score)
+
+            if fit > best_fitness:
+                best_b = b_repr
+                best_e = e_repr
+                best_fitness = fit
+
+    return best_b, best_e, best_fitness
+
+
+@njit(cache=True)
+def _induced_segments_soa(b, e, mask, j1s, jls, index_offsets, index_values, path_offsets, path_rows):
+    n_paths = len(j1s)
+    out = np.empty((n_paths, 2), dtype=np.int32)
+    size = 0
+    for i in range(n_paths):
+        if b < j1s[i] or jls[i] < e:
+            continue
+        idx0 = index_offsets[i]
+        p0 = path_offsets[i]
+        j1 = j1s[i]
+        kb = index_values[idx0 + (b - j1)]
+        ke = index_values[idx0 + (e - 1 - j1)]
+        b_m = path_rows[p0 + kb]
+        e_m = path_rows[p0 + ke] + 1
+        blocked = False
+        for t in range(b_m, e_m):
+            if mask[t]:
+                blocked = True
+                break
+        if blocked:
+            continue
+        out[size, 0] = b_m
+        out[size, 1] = e_m
+        size += 1
+    return out[:size]

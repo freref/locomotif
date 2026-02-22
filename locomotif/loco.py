@@ -147,7 +147,7 @@ class LoCo:
     def calculate_cumulative_similarity_matrix(self):
         backend = self._choose_backend()
         if backend == "event_exact" and self.tau <= 0.0:
-            backend = "dense_heap_exact"
+            backend = "dense_block_exact"
         self._resolved_backend = backend
 
         if backend == "event_exact":
@@ -173,31 +173,6 @@ class LoCo:
                 0,
                 self.warping,
             )
-            return self._csm
-
-        if backend == "sparse_event_graph":
-            row_ptr, col_idx, sim_vals = build_event_csr(
-                self.ts,
-                self.ts2,
-                self.gamma,
-                self.tau,
-                only_triu=self._symmetric,
-                diag_offset=0,
-                event_index=self.event_index,
-            )
-            self._csm, self._dist = loco_jit.cumulative_similarity_matrix_events_sparse(
-                np.int32(len(self.ts)),
-                np.int32(len(self.ts2)),
-                row_ptr,
-                col_idx,
-                sim_vals,
-                self.delta_a,
-                self.delta_m,
-                np.int32(self.sparse_max_gap),
-                self._symmetric,
-                0,
-            )
-            self._bp = None
             return self._csm
 
         if self._sm is None:
@@ -378,10 +353,6 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True, back
         return loco_jit.find_best_paths(csm, dist, mask, tau, l_min, vwidth, warping)
     if backend == "dense_block_exact":
         return loco_jit.find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min, vwidth, warping, np.int32(block_tile_size))
-    if backend == "dense_heap_exact":
-        return loco_jit.find_best_paths_bp_sorted(csm, dist, bp, mask, tau, l_min, vwidth, warping)
-    if backend == "event_exact":
-        return loco_jit.find_best_paths_bp_sorted(csm, dist, bp, mask, tau, l_min, vwidth, warping)
     return loco_jit.find_best_paths_bp_sorted(csm, dist, bp, mask, tau, l_min, vwidth, warping)
 
 
