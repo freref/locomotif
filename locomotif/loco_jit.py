@@ -371,73 +371,6 @@ def cumulative_similarity_matrix_events_bp(n, m, row_ptr, col_idx, sim_vals, tau
 
     return csm, dist, bp
 
-@njit(types.Tuple((
-        types.float32[:, :],
-        types.int32[:, :],
-    ))(int32, int32, int32[:], int32[:], float32[:], float64, float64, int32, boolean, int32), fastmath=True)
-def cumulative_similarity_matrix_events_sparse(n, m, row_ptr, col_idx, sim_vals, delta_a=1.0, delta_m=0.5, max_gap=32, only_triu=False, diag_offset=0):
-    csm = np.zeros((n + 2, m + 2), dtype=np.float32)
-    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
-
-    if max_gap < 1:
-        max_gap = 1
-
-    for i in range(n):
-        j_start = max(0, i - diag_offset) if only_triu else 0
-        p = row_ptr[i]
-        p_end = row_ptr[i + 1]
-
-        while p < p_end:
-            j = col_idx[p]
-            if j < j_start:
-                p += 1
-                continue
-
-            sim = sim_vals[p]
-            p += 1
-
-            pred_max = 0.0
-            pred_dist = 0
-
-            upper_gap = max_gap
-            if i < upper_gap:
-                upper_gap = i
-            if j < upper_gap:
-                upper_gap = j
-
-            for gap in range(1, upper_gap + 1):
-                k = gap - 1
-
-                v_diag = csm[i - gap + 2, j - gap + 2]
-                if v_diag > 0:
-                    cand = decay_gap(v_diag, k, delta_m, delta_a)
-                    if cand > pred_max:
-                        pred_max = cand
-                        pred_dist = dist[i - gap + 2, j - gap + 2] + gap
-
-                v_left = csm[i + 2, j - gap + 2]
-                if v_left > 0:
-                    cand = decay_gap(v_left, k, delta_m, delta_a)
-                    if cand > pred_max:
-                        pred_max = cand
-                        pred_dist = dist[i + 2, j - gap + 2] + gap
-
-                v_up = csm[i - gap + 2, j + 2]
-                if v_up > 0:
-                    cand = decay_gap(v_up, k, delta_m, delta_a)
-                    if cand > pred_max:
-                        pred_max = cand
-                        pred_dist = dist[i - gap + 2, j + 2] + gap
-
-            cur = sim + pred_max
-            if cur > 0:
-                csm[i + 2, j + 2] = cur
-                if pred_max > 0:
-                    dist[i + 2, j + 2] = pred_dist
-
-    return csm, dist
-
-
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32, int32))
 def best_path_warping(csm, mask, i, j, max_len):
     path_rev = np.empty((max_len, 2), dtype=np.int32)
@@ -665,43 +598,6 @@ def _pair_is_greater(v1, c1, v2, c2):
     return c1 > c2
 
 @njit
-def _heap_sift_down(values, cells, start, size):
-    i = start
-    while True:
-        left = 2 * i + 1
-        if left >= size:
-            break
-        right = left + 1
-        largest = left
-        if right < size and _pair_is_greater(values[right], cells[right], values[left], cells[left]):
-            largest = right
-        if _pair_is_greater(values[i], cells[i], values[largest], cells[largest]):
-            break
-        tmp_v = values[i]
-        tmp_c = cells[i]
-        values[i] = values[largest]
-        cells[i] = cells[largest]
-        values[largest] = tmp_v
-        cells[largest] = tmp_c
-        i = largest
-
-@njit
-def _heap_build(values, cells, size):
-    for i in range(size // 2 - 1, -1, -1):
-        _heap_sift_down(values, cells, i, size)
-
-@njit(types.Tuple((float32, int32, int32))(float32[:], int32[:], int32))
-def _heap_pop_max(values, cells, size):
-    top_value = values[0]
-    top_cell = cells[0]
-    size -= 1
-    if size > 0:
-        values[0] = values[size]
-        cells[0] = cells[size]
-        _heap_sift_down(values, cells, 0, size)
-    return top_value, top_cell, size
-
-@njit
 def _heap3_sift_down(values, cells, tiles, start, size):
     i = start
     while True:
@@ -893,60 +789,6 @@ def _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_col
     _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
     mask[ic, j1:j2] = True
     _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
-
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], uint8[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths_heap_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True):
-    mask = mask | (csm <= 0)
-
-    start_mask = (~mask) & (dist >= l_min)
-    pos = np.flatnonzero(start_mask).astype(np.int32)
-    size = np.int32(len(pos))
-
-    heap_values = np.empty(size, dtype=np.float32)
-    heap_cells = np.empty(size, dtype=np.int32)
-
-    ravel_csm = csm.ravel()
-    for k in range(size):
-        cell = pos[k]
-        heap_cells[k] = cell
-        heap_values[k] = ravel_csm[cell]
-
-    _heap_build(heap_values, heap_cells, size)
-
-    n_cols = csm.shape[1]
-    paths = []
-
-    while size > 0:
-        path = np.empty((0, 0), dtype=np.int32)
-        path_found = False
-
-        while not path_found:
-            while True:
-                if size <= 0:
-                    return paths
-                _, cell, size = _heap_pop_max(heap_values, heap_cells, size)
-                i_best = np.int32(cell // n_cols)
-                j_best = np.int32(cell - i_best * n_cols)
-                if not mask[i_best, j_best]:
-                    break
-
-            if i_best < 2 or j_best < 2:
-                return paths
-
-            if warping:
-                path = best_path_warping_bp(bp, mask, i_best, j_best, dist[i_best, j_best] + 1)
-            else:
-                path = best_path_no_warping_bp(bp, mask, i_best, j_best)
-
-            mask = mask_path(path, mask)
-
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-                path_found = True
-
-        mask = mask_vicinity(path, mask, vwidth)
-        paths.append(path)
-
-    return paths
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], uint8[:, :], boolean[:, :], float32, int32, int32, boolean, int32), fastmath=True)
 def find_best_paths_block_exact(csm, dist, bp, mask, tau, l_min=10, vwidth=5, warping=True, tile_size=64):
