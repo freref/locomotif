@@ -183,6 +183,56 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
+@njit(int32[:](float32[:]))
+def radix_argsort_float32(values):
+    n = len(values)
+    order = np.arange(n, dtype=np.int32)
+    if n <= 1:
+        return order
+
+    bits = values.view(np.uint32)
+    keys = np.empty(n, dtype=np.uint32)
+    sign_bit = np.uint32(0x80000000)
+    for i in range(n):
+        b = bits[i]
+        if b & sign_bit:
+            keys[i] = ~b
+        else:
+            keys[i] = b ^ sign_bit
+
+    scratch = np.empty(n, dtype=np.int32)
+    counts = np.zeros(256, dtype=np.int32)
+    offsets = np.empty(256, dtype=np.int32)
+
+    for pass_id in range(4):
+        shift = pass_id * 8
+        counts[:] = 0
+
+        for i in range(n):
+            k = keys[order[i]]
+            b = np.int32((k >> shift) & np.uint32(0xFF))
+            counts[b] += 1
+
+        total = 0
+        for b in range(256):
+            offsets[b] = total
+            total += counts[b]
+
+        for i in range(n):
+            idx = order[i]
+            k = keys[idx]
+            b = np.int32((k >> shift) & np.uint32(0xFF))
+            pos = offsets[b]
+            scratch[pos] = idx
+            offsets[b] = pos + 1
+
+        tmp = order
+        order = scratch
+        scratch = tmp
+
+    return order
+
+
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
@@ -193,13 +243,12 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     
     min_dist = l_min // 2
     start_mask = (~mask) & (dist >= min_dist)
-    pos_i, pos_j = np.nonzero(start_mask)
-    
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
+    pos = np.flatnonzero(start_mask).astype(np.int32)
+    values = csm.ravel()[pos]
+    order = radix_argsort_float32(values)
+    k_best = len(order) - 1
 
-    k_best = len(sorted_pos_i) - 1
+    n_cols = csm.shape[1]
     paths = []
 
     while k_best >= 0:
@@ -208,13 +257,16 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
         path_found = False
 
         while not path_found:
-
-            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
-                k_best -= 1
+            while True:
                 if k_best < 0:
                     return paths
-                
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+                local_idx = order[k_best]
+                k_best -= 1
+                cell = pos[local_idx]
+                i_best = np.int32(cell // n_cols)
+                j_best = np.int32(cell - i_best * n_cols)
+                if not mask[i_best, j_best]:
+                    break
 
             if i_best < 2 or j_best < 2:
                 return paths
