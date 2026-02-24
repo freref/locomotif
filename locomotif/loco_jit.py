@@ -463,16 +463,20 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
             else:
                 path = best_path_no_warping(csm, mask, i_best, j_best)
 
-            _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, 0)
-            dirty_tiles[tile] = False
-            cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
-            if cur_cell >= 0:
-                size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
-
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+                _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth)
+                dirty_tiles[tile] = False
+                cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                if cur_cell >= 0:
+                    size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
                 path_found = True
+            else:
+                _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, 0)
+                dirty_tiles[tile] = False
+                cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                if cur_cell >= 0:
+                    size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
 
-        _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth)
         paths.append(path)
 
     return paths
