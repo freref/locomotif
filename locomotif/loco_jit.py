@@ -191,7 +191,8 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     # min_path_length = l_min if not warping else np.ceil(l_min / 2)
     # start_mask = (~mask) # & (csm >= tau * min_path_length)
     
-    start_mask = (~mask) & (dist >= l_min)
+    min_dist = l_min // 2
+    start_mask = (~mask) & (dist >= min_dist)
     pos_i, pos_j = np.nonzero(start_mask)
     
     values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
