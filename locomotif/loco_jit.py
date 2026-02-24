@@ -233,57 +233,246 @@ def radix_argsort_float32(values):
     return order
 
 
+@njit(boolean(float32, int32, float32, int32))
+def _pair_is_greater(v1, c1, v2, c2):
+    if v1 > v2:
+        return True
+    if v1 < v2:
+        return False
+    return c1 > c2
+
+
+@njit
+def _heap3_sift_down(values, cells, tiles, start, size):
+    i = start
+    while True:
+        left = 2 * i + 1
+        if left >= size:
+            break
+        right = left + 1
+        largest = left
+        if right < size and _pair_is_greater(values[right], cells[right], values[left], cells[left]):
+            largest = right
+        if _pair_is_greater(values[i], cells[i], values[largest], cells[largest]):
+            break
+        tmp_v = values[i]
+        tmp_c = cells[i]
+        tmp_t = tiles[i]
+        values[i] = values[largest]
+        cells[i] = cells[largest]
+        tiles[i] = tiles[largest]
+        values[largest] = tmp_v
+        cells[largest] = tmp_c
+        tiles[largest] = tmp_t
+        i = largest
+
+
+@njit
+def _heap3_build(values, cells, tiles, size):
+    for i in range(size // 2 - 1, -1, -1):
+        _heap3_sift_down(values, cells, tiles, i, size)
+
+
+@njit(types.Tuple((float32, int32, int32, int32))(float32[:], int32[:], int32[:], int32))
+def _heap3_pop_max(values, cells, tiles, size):
+    top_value = values[0]
+    top_cell = cells[0]
+    top_tile = tiles[0]
+    size -= 1
+    if size > 0:
+        values[0] = values[size]
+        cells[0] = cells[size]
+        tiles[0] = tiles[size]
+        _heap3_sift_down(values, cells, tiles, 0, size)
+    return top_value, top_cell, top_tile, size
+
+
+@njit(int32(float32[:], int32[:], int32[:], int32, float32, int32, int32))
+def _heap3_push(values, cells, tiles, size, value, cell, tile):
+    i = size
+    size += 1
+    values[i] = value
+    cells[i] = cell
+    tiles[i] = tile
+    while i > 0:
+        p = (i - 1) // 2
+        if _pair_is_greater(values[p], cells[p], values[i], cells[i]):
+            break
+        tmp_v = values[p]
+        tmp_c = cells[p]
+        tmp_t = tiles[p]
+        values[p] = values[i]
+        cells[p] = cells[i]
+        tiles[p] = tiles[i]
+        values[i] = tmp_v
+        cells[i] = tmp_c
+        tiles[i] = tmp_t
+        i = p
+    return size
+
+
+@njit(types.Tuple((float32, int32))(float32[:, :], boolean[:, :], boolean[:, :], int32, int32, int32))
+def _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size):
+    n_rows, n_cols = csm.shape
+    tr = tile // n_tile_cols
+    tc = tile - tr * n_tile_cols
+    i_start = tr * tile_size
+    j_start = tc * tile_size
+    i_end = min(n_rows, i_start + tile_size)
+    j_end = min(n_cols, j_start + tile_size)
+    best_value = np.float32(-np.inf)
+    best_cell = np.int32(-1)
+    for i in range(i_start, i_end):
+        base = i * n_cols
+        for j in range(j_start, j_end):
+            if mask[i, j] or (not eligible[i, j]):
+                continue
+            value = csm[i, j]
+            cell = np.int32(base + j)
+            if _pair_is_greater(value, cell, best_value, best_cell):
+                best_value = value
+                best_cell = cell
+    return best_value, best_cell
+
+
+@njit
+def _mark_tile_dirty(dirty_tiles, tile):
+    if tile < 0 or tile >= len(dirty_tiles):
+        return
+    dirty_tiles[tile] = True
+
+
+@njit
+def _mark_row_range_dirty(dirty_tiles, row, j1, j2, tile_size, n_tile_cols):
+    if j2 <= j1:
+        return
+    tr = row // tile_size
+    tc1 = j1 // tile_size
+    tc2 = (j2 - 1) // tile_size
+    for tc in range(tc1, tc2 + 1):
+        _mark_tile_dirty(dirty_tiles, tr * n_tile_cols + tc)
+
+
+@njit
+def _mark_col_range_dirty(dirty_tiles, col, i1, i2, tile_size, n_tile_cols):
+    if i2 <= i1:
+        return
+    tc = col // tile_size
+    tr1 = i1 // tile_size
+    tr2 = (i2 - 1) // tile_size
+    for tr in range(tr1, tr2 + 1):
+        _mark_tile_dirty(dirty_tiles, tr * n_tile_cols + tc)
+
+
+@njit
+def _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth):
+    n, m = mask.shape
+    for k in range(len(path) - 1):
+        ic, jc = path[k]
+        it, jt = path[k + 1]
+        di, dj = (it - ic, jt - jc)
+        i1, i2 = max(0, ic - vwidth), min(n, ic + vwidth + 1)
+        j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
+        mask[ic, j1:j2] = True
+        _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
+        if di == 2 and dj == 1:
+            if i2 + 1 < n:
+                mask[ic + 1, jc] = True
+                _mark_tile_dirty(dirty_tiles, ((ic + 1) // tile_size) * n_tile_cols + (jc // tile_size))
+            mask[ic + 1, j1:j2] = True
+            _mark_row_range_dirty(dirty_tiles, ic + 1, j1, j2, tile_size, n_tile_cols)
+        elif di == 1 and dj == 2:
+            if j2 + 1 < m:
+                mask[ic, jc + 1] = True
+                _mark_tile_dirty(dirty_tiles, (ic // tile_size) * n_tile_cols + ((jc + 1) // tile_size))
+            mask[i1:i2, jc + 1] = True
+            _mark_col_range_dirty(dirty_tiles, jc + 1, i1, i2, tile_size, n_tile_cols)
+        else:
+            if not (di == 1 and dj == 1):
+                raise Exception("Path does not comply to the allowed step sizes")
+    ic, jc = path[-1]
+    i1, i2 = max(0, ic - vwidth), min(n, ic + vwidth + 1)
+    j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
+    mask[i1:i2, jc] = True
+    _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
+    mask[ic, j1:j2] = True
+    _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
+
+
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
-    # Mask all zeros
     mask = mask | (csm <= 0)
-    
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    # start_mask = (~mask) # & (csm >= tau * min_path_length)
-    
     min_dist = l_min // 2
-    start_mask = (~mask) & (dist >= min_dist)
-    pos = np.flatnonzero(start_mask).astype(np.int32)
-    values = csm.ravel()[pos]
-    order = radix_argsort_float32(values)
-    k_best = len(order) - 1
+    eligible = (~mask) & (dist >= min_dist)
 
-    n_cols = csm.shape[1]
+    tile_size = np.int32(8)
+    n_rows, n_cols = csm.shape
+    n_tile_rows = (n_rows + tile_size - 1) // tile_size
+    n_tile_cols = (n_cols + tile_size - 1) // tile_size
+    n_tiles = n_tile_rows * n_tile_cols
+
+    dirty_tiles = np.zeros(n_tiles, dtype=np.bool_)
+    heap_values = np.empty(n_tiles, dtype=np.float32)
+    heap_cells = np.empty(n_tiles, dtype=np.int32)
+    heap_tiles = np.empty(n_tiles, dtype=np.int32)
+    size = np.int32(0)
+    for tile in range(n_tiles):
+        value, cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+        if cell >= 0:
+            heap_values[size] = value
+            heap_cells[size] = cell
+            heap_tiles[size] = tile
+            size += 1
+
     paths = []
+    if size <= 0:
+        return paths
+    _heap3_build(heap_values, heap_cells, heap_tiles, size)
 
-    while k_best >= 0:
-
+    while size > 0:
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
 
         while not path_found:
             while True:
-                if k_best < 0:
+                if size <= 0:
                     return paths
-                local_idx = order[k_best]
-                k_best -= 1
-                cell = pos[local_idx]
+                _, cell, tile, size = _heap3_pop_max(heap_values, heap_cells, heap_tiles, size)
+                if dirty_tiles[tile]:
+                    dirty_tiles[tile] = False
+                    cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                    if cur_cell >= 0:
+                        size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
+                    continue
                 i_best = np.int32(cell // n_cols)
                 j_best = np.int32(cell - i_best * n_cols)
-                if not mask[i_best, j_best]:
-                    break
+                if mask[i_best, j_best] or (not eligible[i_best, j_best]):
+                    cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+                    if cur_cell >= 0:
+                        size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
+                    continue
+                break
 
             if i_best < 2 or j_best < 2:
                 return paths
-            
+
             if warping:
                 path = best_path_warping(csm, mask, i_best, j_best)
             else:
                 path = best_path_no_warping(csm, mask, i_best, j_best)
-                
-            mask = mask_vicinity(path, mask, 0)
-            # mask = mask_path(path, mask)
-            
+
+            _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, 0)
+            dirty_tiles[tile] = False
+            cur_value, cur_cell = _tile_best_candidate(csm, eligible, mask, tile, n_tile_cols, tile_size)
+            if cur_cell >= 0:
+                size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
+
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
                 path_found = True
 
-
-        mask = mask_vicinity(path, mask, vwidth)
+        _mask_vicinity_and_mark_dirty(path, mask, dirty_tiles, tile_size, n_tile_cols, vwidth)
         paths.append(path)
 
     return paths
