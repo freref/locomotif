@@ -8,6 +8,208 @@ from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
 
+@njit(cache=True)
+def _is_diagonal_path(path):
+    for k in range(len(path)):
+        if path[k, 0] != path[k, 1]:
+            return False
+    return True
+
+@njit(cache=True)
+def _mirror_path(path):
+    out = np.empty(path.shape, dtype=np.int32)
+    out[:, 0] = path[:, 1]
+    out[:, 1] = path[:, 0]
+    return out
+
+@njit(cache=True)
+def _path_similarities_from_sm(path, sm):
+    sims = np.empty(len(path), dtype=np.float32)
+    for k in range(len(path)):
+        sims[k] = sm[path[k, 0] - 2, path[k, 1] - 2]
+    return sims
+
+@njit(cache=True)
+def _shift_path_from_raw(path):
+    out = np.empty(path.shape, dtype=np.int32)
+    for k in range(len(path)):
+        out[k, 0] = path[k, 0] - 2
+        out[k, 1] = path[k, 1] - 2
+    return out
+
+@njit(cache=True)
+def _materialize_paths_from_raw_numba(paths, sm):
+    out = List()
+    for p in paths:
+        sims = _path_similarities_from_sm(p, sm)
+        shifted = _shift_path_from_raw(p)
+        out.append(Path(shifted, sims))
+        if not _is_diagonal_path(p):
+            out.append(Path(_mirror_path(shifted), sims))
+    return out
+
+@njit(cache=True)
+def _count_soa_sizes_from_raw(paths):
+    n_paths = np.int32(0)
+    total_index = np.int32(0)
+    total_path = np.int32(0)
+    total_csum = np.int32(0)
+
+    for p in paths:
+        k = len(p)
+        if k <= 0:
+            continue
+
+        j1 = p[0, 1]
+        jl = p[k - 1, 1] + 1
+        n_paths += 1
+        total_index += np.int32(jl - j1)
+        total_path += np.int32(k)
+        total_csum += np.int32(k + 1)
+
+        if not _is_diagonal_path(p):
+            j1m = p[0, 0]
+            jlm = p[k - 1, 0] + 1
+            n_paths += 1
+            total_index += np.int32(jlm - j1m)
+            total_path += np.int32(k)
+            total_csum += np.int32(k + 1)
+
+    return n_paths, total_index, total_path, total_csum
+
+@njit(cache=True)
+def _fill_soa_entry_from_raw_path(path, mirrored, sm, j1s, jls, index_offsets, index_values, path_offsets, path_rows, csum_offsets, csum_values, entry, idx_pos, path_pos, csum_pos):
+    k = len(path)
+    if mirrored:
+        j1 = np.int32(path[0, 0] - 2)
+        jl = np.int32(path[k - 1, 0] - 2 + 1)
+        j_curr = np.int32(path[0, 0] - 2)
+    else:
+        j1 = np.int32(path[0, 1] - 2)
+        jl = np.int32(path[k - 1, 1] - 2 + 1)
+        j_curr = np.int32(path[0, 1] - 2)
+
+    idx_len = np.int32(jl - j1)
+    j1s[entry] = j1
+    jls[entry] = jl
+    index_offsets[entry] = idx_pos
+    path_offsets[entry] = path_pos
+    csum_offsets[entry] = csum_pos
+
+    for u in range(idx_len):
+        index_values[idx_pos + u] = 0
+
+    csum_values[csum_pos] = np.float32(0.0)
+    for t in range(k):
+        if mirrored:
+            out_row = np.int32(path[t, 1] - 2)
+            out_col = np.int32(path[t, 0] - 2)
+        else:
+            out_row = np.int32(path[t, 0] - 2)
+            out_col = np.int32(path[t, 1] - 2)
+
+        path_rows[path_pos + t] = out_row
+        sim_r = np.int32(path[t, 0] - 2)
+        sim_c = np.int32(path[t, 1] - 2)
+        csum_values[csum_pos + t + 1] = csum_values[csum_pos + t] + np.float32(sm[sim_r, sim_c])
+
+        if t > 0 and out_col != j_curr:
+            start = np.int32(j_curr - j1 + 1)
+            end = np.int32(out_col - j1 + 1)
+            for u in range(start, end):
+                index_values[idx_pos + u] = np.int32(t)
+            j_curr = out_col
+
+    return entry + 1, idx_pos + idx_len, path_pos + np.int32(k), csum_pos + np.int32(k + 1)
+
+@njit(cache=True)
+def _build_paths_soa_from_raw_numba(paths, sm):
+    n_paths, total_index, total_path, total_csum = _count_soa_sizes_from_raw(paths)
+    if n_paths <= 0:
+        z_i32 = np.empty(0, dtype=np.int32)
+        z_f32 = np.empty(0, dtype=np.float32)
+        return (
+            z_i32,
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_f32,
+        )
+
+    j1s = np.empty(n_paths, dtype=np.int32)
+    jls = np.empty(n_paths, dtype=np.int32)
+    index_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    path_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    csum_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    index_values = np.empty(total_index, dtype=np.int32)
+    path_rows = np.empty(total_path, dtype=np.int32)
+    csum_values = np.empty(total_csum, dtype=np.float32)
+
+    entry = np.int32(0)
+    idx_pos = np.int32(0)
+    path_pos = np.int32(0)
+    csum_pos = np.int32(0)
+
+    for p in paths:
+        k = len(p)
+        if k <= 0:
+            continue
+
+        entry, idx_pos, path_pos, csum_pos = _fill_soa_entry_from_raw_path(
+            p,
+            False,
+            sm,
+            j1s,
+            jls,
+            index_offsets,
+            index_values,
+            path_offsets,
+            path_rows,
+            csum_offsets,
+            csum_values,
+            entry,
+            idx_pos,
+            path_pos,
+            csum_pos,
+        )
+
+        if not _is_diagonal_path(p):
+            entry, idx_pos, path_pos, csum_pos = _fill_soa_entry_from_raw_path(
+                p,
+                True,
+                sm,
+                j1s,
+                jls,
+                index_offsets,
+                index_values,
+                path_offsets,
+                path_rows,
+                csum_offsets,
+                csum_values,
+                entry,
+                idx_pos,
+                path_pos,
+                csum_pos,
+            )
+
+    index_offsets[n_paths] = idx_pos
+    path_offsets[n_paths] = path_pos
+    csum_offsets[n_paths] = csum_pos
+
+    return (
+        np.ascontiguousarray(j1s),
+        np.ascontiguousarray(jls),
+        np.ascontiguousarray(index_offsets),
+        np.ascontiguousarray(index_values),
+        np.ascontiguousarray(path_offsets),
+        np.ascontiguousarray(path_rows),
+        np.ascontiguousarray(csum_offsets),
+        np.ascontiguousarray(csum_values),
+    )
+
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -47,6 +249,7 @@ class LoCoMotif:
         # LoCo instance
         self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, warping=warping)
         self._paths = None
+        self._paths_raw = None
         self._paths_soa = None
 
     @classmethod
@@ -60,39 +263,39 @@ class LoCoMotif:
 
     def find_best_paths(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2)
-        paths = self._loco.find_best_paths(self.l_min, vwidth)
-       
-        # LoCo finds paths the part of the SSM above the diagonal. 
-        # Here, the paths are converted to Path objects, and the mirrored versions of the found paths are added.
-        self._paths = List()
-        
+        paths = self._loco.find_best_paths_padded(self.l_min, vwidth)
+        raw_paths = List()
         for path in paths:
-            i, j = path[:, 0], path[:, 1]
-            path_similarities = self.self_similarity_matrix[i, j]
-            self._paths.append(Path(path, path_similarities))
-            # Also add the mirrored path
-            # Do not mirror the diagonal
-            if np.all(i == j):
-                continue
-            path_mirrored = np.zeros(path.shape, dtype=np.int32)
-            path_mirrored[:, 0] = j
-            path_mirrored[:, 1] = i
-            self._paths.append(Path(path_mirrored, path_similarities))
-
-        self._paths_soa = None
-        return self._paths
+            raw_paths.append(np.ascontiguousarray(path, dtype=np.int32))
+        self._paths_raw = raw_paths
+        self._paths = None
+        self._paths_soa = _build_paths_soa_from_raw(self._paths_raw, self.self_similarity_matrix)
+        return self.local_warping_paths
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
             mask = np.full(len(self.ts), False)
+        self._ensure_paths_materialized()
         return _induced_paths(b, e, mask, self._paths)
+
+    def _ensure_paths_materialized(self):
+        if self._paths is not None:
+            return
+        if self._paths_raw is None:
+            self.find_best_paths()
+        self._paths = _materialize_paths_from_raw(self._paths_raw, self.self_similarity_matrix)
 
     # iteratively finds the best motif set
     def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
-        if self._paths is None:
+        if self._paths is None and self._paths_raw is None:
             self.find_best_paths()
-        if not keep_fitnesses and self._paths_soa is None:
-            self._paths_soa = _build_paths_soa(self._paths)
+        if keep_fitnesses:
+            self._ensure_paths_materialized()
+        elif self._paths_soa is None:
+            if self._paths_raw is not None:
+                self._paths_soa = _build_paths_soa_from_raw(self._paths_raw, self.self_similarity_matrix)
+            else:
+                self._paths_soa = _build_paths_soa(self._paths)
             
         n = len(self.ts)
         # Handle masks
@@ -164,7 +367,9 @@ class LoCoMotif:
             
     @property
     def local_warping_paths(self):
-        return self._paths
+        if self._paths is not None:
+            return self._paths
+        return self._paths_raw
     
     @property
     def self_similarity_matrix(self):
@@ -195,6 +400,12 @@ def _induced_paths(b, e, mask, P):
 
 def _build_paths_soa(P):
     return _build_paths_soa_numba(P)
+
+def _build_paths_soa_from_raw(paths, sm):
+    return _build_paths_soa_from_raw_numba(paths, sm)
+
+def _materialize_paths_from_raw(paths, sm):
+    return _materialize_paths_from_raw_numba(paths, sm)
 
 
 @njit(cache=True)
@@ -503,6 +714,14 @@ def _find_best_candidate_soa(
     if n_paths_total == 0:
         return np.int32(0), np.int32(0), np.float32(0.0)
 
+    row_prefix = np.zeros(len(row_mask) + 1, dtype=np.int32)
+    for idx in range(len(row_mask)):
+        row_prefix[idx + 1] = row_prefix[idx] + (1 if row_mask[idx] else 0)
+
+    col_prefix = np.zeros(c + 1, dtype=np.int32)
+    for idx in range(c):
+        col_prefix[idx + 1] = col_prefix[idx] + (1 if col_mask[idx] else 0)
+
     q_order = np.argsort(j1s).astype(np.int32)
     active_keys = np.empty(n_paths_total, dtype=np.int32)
     active_paths = np.empty(n_paths_total, dtype=np.int32)
@@ -511,6 +730,8 @@ def _find_best_candidate_soa(
 
     pe = np.zeros(n_paths_total, dtype=np.bool_)
     es_checked = np.zeros(n_paths_total, dtype=np.int32)
+    kb_by_path = np.zeros(n_paths_total, dtype=np.int32)
+    b_by_path = np.zeros(n_paths_total, dtype=np.int32)
 
     best_b = np.int32(0)
     best_e = np.int32(0)
@@ -553,17 +774,20 @@ def _find_best_candidate_soa(
         nb_paths = active_size
         if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
             continue
-
-        blocked = False
-        for t in range(b_repr, b_repr + l_min - 1):
-            if col_mask[t]:
-                blocked = True
-                break
-        if blocked:
+        if col_prefix[b_repr + l_min - 1] > col_prefix[b_repr]:
             continue
 
         pe[:nb_paths] = True
         es_checked[:nb_paths] = active_keys[:nb_paths]
+        for k in range(nb_paths):
+            path_index = active_paths[k]
+            j1 = j1s[path_index]
+            idx0 = index_offsets[path_index]
+            p0 = path_offsets[path_index]
+            kb = index_values[idx0 + (b_repr - j1)]
+            kb_by_path[k] = kb
+            b_by_path[k] = path_rows[p0 + kb]
+
         nb_remaining_paths = nb_paths
 
         for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
@@ -597,17 +821,12 @@ def _find_best_candidate_soa(
                 p0 = path_offsets[path_index]
                 c0 = csum_offsets[path_index]
 
-                kb = index_values[idx0 + (b_repr - j1)]
-                b = path_rows[p0 + kb]
+                kb = kb_by_path[k]
+                b = b_by_path[k]
                 ke = index_values[idx0 + (e_repr - 1 - j1)]
                 e = path_rows[p0 + ke] + 1
 
-                masked = False
-                for t in range(es_checked[k], e):
-                    if row_mask[t]:
-                        masked = True
-                        break
-                if masked:
+                if row_prefix[e] > row_prefix[es_checked[k]]:
                     pe[k] = False
                     nb_remaining_paths -= 1
                     continue

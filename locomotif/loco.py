@@ -59,6 +59,12 @@ class LoCo:
         return self._csm
 
     def find_best_paths(self, l_min=None, vwidth=None):
+        paths = self.find_best_paths_padded(l_min=l_min, vwidth=vwidth)
+        paths = [path - 2 for path in paths]
+        self._paths = paths
+        return self._paths
+
+    def find_best_paths_padded(self, l_min=None, vwidth=None):
         if l_min is None:
             l_min = min(len(self.ts), len(self.ts2)) // 10
         self.l_min = l_min
@@ -75,16 +81,14 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        paths = find_best_paths(self._csm, self._dist, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
-        paths = [path-2 for path in paths]
+        raw_paths = find_best_paths(self._csm, self._dist, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
+        paths = [path for path in raw_paths]
 
         if self._symmetric:
-            # Prepend the diagonal to the result set.
-            diagonal = np.tile(np.arange(len(self.ts), dtype=np.int32), (2, 1)).T
+            diagonal = np.tile(np.arange(len(self.ts), dtype=np.int32) + 2, (2, 1)).T
             paths.insert(0, diagonal)
 
-        self._paths = paths
-        return self._paths
+        return paths
 
     @classmethod
     def instance_from_rho(cls, ts, rho, gamma=None, warping=True, ts2=None, equal_weight_dims=False):
