@@ -64,6 +64,51 @@ class LoCo:
         self._paths = paths
         return self._paths
 
+    def find_best_paths_flat_padded(self, l_min=None, vwidth=None):
+        if l_min is None:
+            l_min = min(len(self.ts), len(self.ts2)) // 10
+        self.l_min = l_min
+
+        if vwidth is None:
+            vwidth = l_min // 2
+
+        if self._csm is None:
+            self.calculate_cumulative_similarity_matrix()
+
+        mask = np.full(self._csm.shape, self._symmetric)
+        if self._symmetric:
+            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+
+        offsets, points = find_best_paths_flat(
+            self._csm,
+            self._dist,
+            mask,
+            self.tau,
+            l_min=l_min,
+            vwidth=vwidth,
+            warping=self.warping,
+        )
+
+        if self._symmetric:
+            diagonal = np.ascontiguousarray(
+                np.tile(np.arange(len(self.ts), dtype=np.int32) + 2, (2, 1)).T
+            )
+            n_paths = len(offsets) - 1
+            dlen = len(diagonal)
+            new_offsets = np.empty(n_paths + 2, dtype=np.int32)
+            new_offsets[0] = 0
+            new_offsets[1] = dlen
+            for i in range(n_paths):
+                new_offsets[i + 2] = offsets[i + 1] + dlen
+
+            new_points = np.empty((len(points) + dlen, 2), dtype=np.int32)
+            new_points[:dlen, :] = diagonal
+            new_points[dlen:, :] = points
+            offsets = new_offsets
+            points = new_points
+
+        return offsets, points
+
     def find_best_paths_padded(self, l_min=None, vwidth=None):
         if l_min is None:
             l_min = min(len(self.ts), len(self.ts2)) // 10
@@ -81,11 +126,12 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        raw_paths = find_best_paths(self._csm, self._dist, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
-        paths = [path for path in raw_paths]
+        paths = find_best_paths(self._csm, self._dist, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
 
         if self._symmetric:
-            diagonal = np.tile(np.arange(len(self.ts), dtype=np.int32) + 2, (2, 1)).T
+            diagonal = np.ascontiguousarray(
+                np.tile(np.arange(len(self.ts), dtype=np.int32) + 2, (2, 1)).T
+            )
             paths.insert(0, diagonal)
 
         return paths
@@ -122,6 +168,10 @@ def cumulative_similarity_matrix(sm, l_min=10, tau=0.5, delta_a=1.0, delta_m=0.5
 def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = loco_jit.find_best_paths(csm, dist, mask, tau, l_min, vwidth, warping)
     return paths
+
+
+def find_best_paths_flat(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
+    return loco_jit.find_best_paths_flat(csm, dist, mask, tau, l_min, vwidth, warping)
 
 def ensure_multivariate(ts):
     ts = np.asarray(ts)

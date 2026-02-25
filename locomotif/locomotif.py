@@ -8,6 +8,27 @@ from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
 
+
+class FlatRawPaths:
+    def __init__(self, offsets, points):
+        self.offsets = offsets
+        self.points = points
+
+    def __len__(self):
+        return len(self.offsets) - 1
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(len(self))
+            return [self[i] for i in range(start, stop, step)]
+        s = int(self.offsets[idx])
+        e = int(self.offsets[idx + 1])
+        return self.points[s:e]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
 @njit(cache=True)
 def _is_diagonal_path(path):
     for k in range(len(path)):
@@ -210,6 +231,201 @@ def _build_paths_soa_from_raw_numba(paths, sm):
         np.ascontiguousarray(csum_values),
     )
 
+
+@njit(cache=True)
+def _is_diagonal_segment(path_points, start, end):
+    for idx in range(start, end):
+        if path_points[idx, 0] != path_points[idx, 1]:
+            return False
+    return True
+
+
+@njit(cache=True)
+def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, jls, index_offsets, index_values, path_offsets, path_rows, csum_offsets, csum_values, entry, idx_pos, path_pos, csum_pos):
+    k = np.int32(end - start)
+    if mirrored:
+        j1 = np.int32(path_points[start, 0] - 2)
+        jl = np.int32(path_points[end - 1, 0] - 2 + 1)
+        j_curr = np.int32(path_points[start, 0] - 2)
+    else:
+        j1 = np.int32(path_points[start, 1] - 2)
+        jl = np.int32(path_points[end - 1, 1] - 2 + 1)
+        j_curr = np.int32(path_points[start, 1] - 2)
+
+    idx_len = np.int32(jl - j1)
+    j1s[entry] = j1
+    jls[entry] = jl
+    index_offsets[entry] = idx_pos
+    path_offsets[entry] = path_pos
+    csum_offsets[entry] = csum_pos
+
+    for u in range(idx_len):
+        index_values[idx_pos + u] = 0
+
+    csum_values[csum_pos] = np.float32(0.0)
+    for t in range(k):
+        src = start + t
+        if mirrored:
+            out_row = np.int32(path_points[src, 1] - 2)
+            out_col = np.int32(path_points[src, 0] - 2)
+        else:
+            out_row = np.int32(path_points[src, 0] - 2)
+            out_col = np.int32(path_points[src, 1] - 2)
+
+        path_rows[path_pos + t] = out_row
+        sim_r = np.int32(path_points[src, 0] - 2)
+        sim_c = np.int32(path_points[src, 1] - 2)
+        csum_values[csum_pos + t + 1] = csum_values[csum_pos + t] + np.float32(sm[sim_r, sim_c])
+
+        if t > 0 and out_col != j_curr:
+            start_u = np.int32(j_curr - j1 + 1)
+            end_u = np.int32(out_col - j1 + 1)
+            for u in range(start_u, end_u):
+                index_values[idx_pos + u] = np.int32(t)
+            j_curr = out_col
+
+    return entry + 1, idx_pos + idx_len, path_pos + k, csum_pos + np.int32(k + 1)
+
+
+@njit(cache=True)
+def _build_paths_soa_from_flat_numba(path_offsets_raw, path_points, sm):
+    n_raw = np.int32(len(path_offsets_raw) - 1)
+    n_paths = np.int32(0)
+    total_index = np.int32(0)
+    total_path = np.int32(0)
+    total_csum = np.int32(0)
+
+    for i in range(n_raw):
+        start = np.int32(path_offsets_raw[i])
+        end = np.int32(path_offsets_raw[i + 1])
+        k = end - start
+        if k <= 0:
+            continue
+
+        j1 = np.int32(path_points[start, 1] - 2)
+        jl = np.int32(path_points[end - 1, 1] - 2 + 1)
+        n_paths += 1
+        total_index += np.int32(jl - j1)
+        total_path += k
+        total_csum += np.int32(k + 1)
+
+        if not _is_diagonal_segment(path_points, start, end):
+            j1m = np.int32(path_points[start, 0] - 2)
+            jlm = np.int32(path_points[end - 1, 0] - 2 + 1)
+            n_paths += 1
+            total_index += np.int32(jlm - j1m)
+            total_path += k
+            total_csum += np.int32(k + 1)
+
+    if n_paths <= 0:
+        z_i32 = np.empty(0, dtype=np.int32)
+        z_f32 = np.empty(0, dtype=np.float32)
+        return (
+            z_i32,
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_i32,
+            np.zeros(1, dtype=np.int32),
+            z_f32,
+        )
+
+    j1s = np.empty(n_paths, dtype=np.int32)
+    jls = np.empty(n_paths, dtype=np.int32)
+    index_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    path_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    csum_offsets = np.empty(n_paths + 1, dtype=np.int32)
+    index_values = np.empty(total_index, dtype=np.int32)
+    path_rows = np.empty(total_path, dtype=np.int32)
+    csum_values = np.empty(total_csum, dtype=np.float32)
+
+    entry = np.int32(0)
+    idx_pos = np.int32(0)
+    path_pos = np.int32(0)
+    csum_pos = np.int32(0)
+
+    for i in range(n_raw):
+        start = np.int32(path_offsets_raw[i])
+        end = np.int32(path_offsets_raw[i + 1])
+        if end <= start:
+            continue
+
+        entry, idx_pos, path_pos, csum_pos = _fill_soa_entry_from_flat_path(
+            path_points,
+            start,
+            end,
+            False,
+            sm,
+            j1s,
+            jls,
+            index_offsets,
+            index_values,
+            path_offsets,
+            path_rows,
+            csum_offsets,
+            csum_values,
+            entry,
+            idx_pos,
+            path_pos,
+            csum_pos,
+        )
+
+        if not _is_diagonal_segment(path_points, start, end):
+            entry, idx_pos, path_pos, csum_pos = _fill_soa_entry_from_flat_path(
+                path_points,
+                start,
+                end,
+                True,
+                sm,
+                j1s,
+                jls,
+                index_offsets,
+                index_values,
+                path_offsets,
+                path_rows,
+                csum_offsets,
+                csum_values,
+                entry,
+                idx_pos,
+                path_pos,
+                csum_pos,
+            )
+
+    index_offsets[n_paths] = idx_pos
+    path_offsets[n_paths] = path_pos
+    csum_offsets[n_paths] = csum_pos
+
+    return (
+        np.ascontiguousarray(j1s),
+        np.ascontiguousarray(jls),
+        np.ascontiguousarray(index_offsets),
+        np.ascontiguousarray(index_values),
+        np.ascontiguousarray(path_offsets),
+        np.ascontiguousarray(path_rows),
+        np.ascontiguousarray(csum_offsets),
+        np.ascontiguousarray(csum_values),
+    )
+
+
+@njit(cache=True)
+def _materialize_paths_from_flat_numba(path_offsets_raw, path_points, sm):
+    out = List()
+    n_raw = len(path_offsets_raw) - 1
+    for i in range(n_raw):
+        start = np.int32(path_offsets_raw[i])
+        end = np.int32(path_offsets_raw[i + 1])
+        if end <= start:
+            continue
+
+        p = path_points[start:end]
+        sims = _path_similarities_from_sm(p, sm)
+        shifted = _shift_path_from_raw(p)
+        out.append(Path(shifted, sims))
+        if not _is_diagonal_segment(path_points, start, end):
+            out.append(Path(_mirror_path(shifted), sims))
+    return out
+
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -263,11 +479,8 @@ class LoCoMotif:
 
     def find_best_paths(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2)
-        paths = self._loco.find_best_paths_padded(self.l_min, vwidth)
-        raw_paths = List()
-        for path in paths:
-            raw_paths.append(np.ascontiguousarray(path, dtype=np.int32))
-        self._paths_raw = raw_paths
+        path_offsets_raw, path_points = self._loco.find_best_paths_flat_padded(self.l_min, vwidth)
+        self._paths_raw = FlatRawPaths(path_offsets_raw, path_points)
         self._paths = None
         self._paths_soa = _build_paths_soa_from_raw(self._paths_raw, self.self_similarity_matrix)
         return self.local_warping_paths
@@ -402,9 +615,13 @@ def _build_paths_soa(P):
     return _build_paths_soa_numba(P)
 
 def _build_paths_soa_from_raw(paths, sm):
+    if isinstance(paths, FlatRawPaths):
+        return _build_paths_soa_from_flat_numba(paths.offsets, paths.points, sm)
     return _build_paths_soa_from_raw_numba(paths, sm)
 
 def _materialize_paths_from_raw(paths, sm):
+    if isinstance(paths, FlatRawPaths):
+        return _materialize_paths_from_flat_numba(paths.offsets, paths.points, sm)
     return _materialize_paths_from_raw_numba(paths, sm)
 
 

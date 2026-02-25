@@ -507,3 +507,32 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
         paths.append(path)
 
     return paths
+
+
+@njit(types.Tuple((int32[:], int32[:, :]))(List(Array(int32, 2, "C"))))
+def flatten_paths(paths):
+    n_paths = len(paths)
+    offsets = np.empty(n_paths + 1, dtype=np.int32)
+    offsets[0] = 0
+    total_points = np.int32(0)
+    for i in range(n_paths):
+        total_points += np.int32(len(paths[i]))
+        offsets[i + 1] = total_points
+
+    points = np.empty((total_points, 2), dtype=np.int32)
+    pos = np.int32(0)
+    for i in range(n_paths):
+        path = paths[i]
+        k = len(path)
+        for t in range(k):
+            points[pos + t, 0] = path[t, 0]
+            points[pos + t, 1] = path[t, 1]
+        pos += np.int32(k)
+
+    return offsets, points
+
+
+@njit(types.Tuple((int32[:], int32[:, :]))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
+def find_best_paths_flat(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
+    paths = find_best_paths(csm, dist, mask, tau, l_min, vwidth, warping)
+    return flatten_paths(paths)
