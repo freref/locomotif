@@ -241,7 +241,7 @@ def _is_diagonal_segment(path_points, start, end):
 
 
 @njit(cache=True)
-def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, jls, index_offsets, index_values, path_offsets, path_rows, csum_offsets, csum_values, entry, idx_pos, path_pos, csum_pos):
+def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, jls, index_offsets, index_values, path_offsets, path_rows, csum_offsets, csum_values, entry, idx_pos, path_pos, csum_pos, write_csum, csum_ref_pos):
     k = np.int32(end - start)
     if mirrored:
         j1 = np.int32(path_points[start, 0] - 2)
@@ -257,12 +257,15 @@ def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, j
     jls[entry] = jl
     index_offsets[entry] = idx_pos
     path_offsets[entry] = path_pos
-    csum_offsets[entry] = csum_pos
+    if write_csum:
+        csum_offsets[entry] = csum_pos
+        csum_values[csum_pos] = np.float32(0.0)
+    else:
+        csum_offsets[entry] = csum_ref_pos
 
     for u in range(idx_len):
         index_values[idx_pos + u] = 0
 
-    csum_values[csum_pos] = np.float32(0.0)
     for t in range(k):
         src = start + t
         if mirrored:
@@ -273,9 +276,10 @@ def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, j
             out_col = np.int32(path_points[src, 1] - 2)
 
         path_rows[path_pos + t] = out_row
-        sim_r = np.int32(path_points[src, 0] - 2)
-        sim_c = np.int32(path_points[src, 1] - 2)
-        csum_values[csum_pos + t + 1] = csum_values[csum_pos + t] + np.float32(sm[sim_r, sim_c])
+        if write_csum:
+            sim_r = np.int32(path_points[src, 0] - 2)
+            sim_c = np.int32(path_points[src, 1] - 2)
+            csum_values[csum_pos + t + 1] = csum_values[csum_pos + t] + np.float32(sm[sim_r, sim_c])
 
         if t > 0 and out_col != j_curr:
             start_u = np.int32(j_curr - j1 + 1)
@@ -284,7 +288,9 @@ def _fill_soa_entry_from_flat_path(path_points, start, end, mirrored, sm, j1s, j
                 index_values[idx_pos + u] = np.int32(t)
             j_curr = out_col
 
-    return entry + 1, idx_pos + idx_len, path_pos + k, csum_pos + np.int32(k + 1)
+    if write_csum:
+        return entry + 1, idx_pos + idx_len, path_pos + k, csum_pos + np.int32(k + 1)
+    return entry + 1, idx_pos + idx_len, path_pos + k, csum_pos
 
 
 @njit(cache=True)
@@ -315,7 +321,6 @@ def _build_paths_soa_from_flat_numba(path_offsets_raw, path_points, sm):
             n_paths += 1
             total_index += np.int32(jlm - j1m)
             total_path += k
-            total_csum += np.int32(k + 1)
 
     if n_paths <= 0:
         z_i32 = np.empty(0, dtype=np.int32)
@@ -369,9 +374,12 @@ def _build_paths_soa_from_flat_numba(path_offsets_raw, path_points, sm):
             idx_pos,
             path_pos,
             csum_pos,
+            True,
+            np.int32(0),
         )
 
         if not _is_diagonal_segment(path_points, start, end):
+            csum_ref_pos = csum_offsets[entry - 1]
             entry, idx_pos, path_pos, csum_pos = _fill_soa_entry_from_flat_path(
                 path_points,
                 start,
@@ -390,6 +398,8 @@ def _build_paths_soa_from_flat_numba(path_offsets_raw, path_points, sm):
                 idx_pos,
                 path_pos,
                 csum_pos,
+                False,
+                csum_ref_pos,
             )
 
     index_offsets[n_paths] = idx_pos
