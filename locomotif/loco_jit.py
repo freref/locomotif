@@ -398,7 +398,7 @@ def _mark_col_range_dirty(dirty_tiles, col, i1, i2, tile_size, n_tile_cols):
 
 
 @njit
-def _mask_vicinity_and_mark_dirty(path, mask, active, dirty_tiles, tile_size, n_tile_cols, vwidth):
+def _mask_vicinity_active(path, mask, active, vwidth):
     n, m = mask.shape
     for k in range(len(path) - 1):
         ic, jc = path[k]
@@ -408,26 +408,20 @@ def _mask_vicinity_and_mark_dirty(path, mask, active, dirty_tiles, tile_size, n_
         j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
         mask[i1:i2, jc] = True
         active[i1:i2, jc] = False
-        _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
         mask[ic, j1:j2] = True
         active[ic, j1:j2] = False
-        _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
         if di == 2 and dj == 1:
             if i2 + 1 < n:
                 mask[ic + 1, jc] = True
                 active[ic + 1, jc] = False
-                _mark_tile_dirty(dirty_tiles, ((ic + 1) // tile_size) * n_tile_cols + (jc // tile_size))
             mask[ic + 1, j1:j2] = True
             active[ic + 1, j1:j2] = False
-            _mark_row_range_dirty(dirty_tiles, ic + 1, j1, j2, tile_size, n_tile_cols)
         elif di == 1 and dj == 2:
             if j2 + 1 < m:
                 mask[ic, jc + 1] = True
                 active[ic, jc + 1] = False
-                _mark_tile_dirty(dirty_tiles, (ic // tile_size) * n_tile_cols + ((jc + 1) // tile_size))
             mask[i1:i2, jc + 1] = True
             active[i1:i2, jc + 1] = False
-            _mark_col_range_dirty(dirty_tiles, jc + 1, i1, i2, tile_size, n_tile_cols)
         else:
             if not (di == 1 and dj == 1):
                 raise Exception("Path does not comply to the allowed step sizes")
@@ -436,10 +430,8 @@ def _mask_vicinity_and_mark_dirty(path, mask, active, dirty_tiles, tile_size, n_
     j1, j2 = max(0, jc - vwidth), min(m, jc + vwidth + 1)
     mask[i1:i2, jc] = True
     active[i1:i2, jc] = False
-    _mark_col_range_dirty(dirty_tiles, jc, i1, i2, tile_size, n_tile_cols)
     mask[ic, j1:j2] = True
     active[ic, j1:j2] = False
-    _mark_row_range_dirty(dirty_tiles, ic, j1, j2, tile_size, n_tile_cols)
 
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], int32[:, :], boolean[:, :], float32, int32, int32, boolean))
@@ -454,7 +446,6 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
     n_tile_cols = (n_cols + tile_size - 1) // tile_size
     n_tiles = n_tile_rows * n_tile_cols
 
-    dirty_tiles = np.zeros(n_tiles, dtype=np.bool_)
     heap_values = np.empty(n_tiles, dtype=np.float32)
     heap_cells = np.empty(n_tiles, dtype=np.int32)
     heap_tiles = np.empty(n_tiles, dtype=np.int32)
@@ -481,12 +472,6 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
                 if size <= 0:
                     return paths
                 _, cell, tile, size = _heap3_pop_max(heap_values, heap_cells, heap_tiles, size)
-                if dirty_tiles[tile]:
-                    dirty_tiles[tile] = False
-                    cur_value, cur_cell = _tile_best_candidate(csm, active, tile, n_tile_cols, tile_size)
-                    if cur_cell >= 0:
-                        size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
-                    continue
                 i_best = np.int32(cell // n_cols)
                 j_best = np.int32(cell - i_best * n_cols)
                 if not active[i_best, j_best]:
@@ -505,15 +490,13 @@ def find_best_paths(csm, dist, mask, tau, l_min=10, vwidth=5, warping=True):
                 path = best_path_no_warping(csm, mask, i_best, j_best)
 
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-                _mask_vicinity_and_mark_dirty(path, mask, active, dirty_tiles, tile_size, n_tile_cols, vwidth)
-                dirty_tiles[tile] = False
+                _mask_vicinity_active(path, mask, active, vwidth)
                 cur_value, cur_cell = _tile_best_candidate(csm, active, tile, n_tile_cols, tile_size)
                 if cur_cell >= 0:
                     size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
                 path_found = True
             else:
-                _mask_vicinity_and_mark_dirty(path, mask, active, dirty_tiles, tile_size, n_tile_cols, 0)
-                dirty_tiles[tile] = False
+                _mask_vicinity_active(path, mask, active, 0)
                 cur_value, cur_cell = _tile_best_candidate(csm, active, tile, n_tile_cols, tile_size)
                 if cur_cell >= 0:
                     size = _heap3_push(heap_values, heap_cells, heap_tiles, size, cur_value, cur_cell, tile)
