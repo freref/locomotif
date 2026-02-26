@@ -8,6 +8,28 @@ from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
 
+@njit(cache=True)
+def _materialize_paths_with_mirror(raw_paths, sm):
+    out = List()
+    for path in raw_paths:
+        l = len(path)
+        sims = np.empty(l, dtype=np.float32)
+        is_diagonal = True
+        for k in range(l):
+            i = path[k, 0]
+            j = path[k, 1]
+            sims[k] = sm[i, j]
+            if i != j:
+                is_diagonal = False
+
+        out.append(Path(path, sims))
+        if not is_diagonal:
+            mirrored = np.empty(path.shape, dtype=np.int32)
+            mirrored[:, 0] = path[:, 1]
+            mirrored[:, 1] = path[:, 0]
+            out.append(Path(mirrored, sims))
+    return out
+
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -60,24 +82,7 @@ class LoCoMotif:
     def find_best_paths(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2)
         paths = self._loco.find_best_paths(self.l_min, vwidth)
-       
-        # LoCo finds paths the part of the SSM above the diagonal. 
-        # Here, the paths are converted to Path objects, and the mirrored versions of the found paths are added.
-        self._paths = List()
-        
-        for path in paths:
-            i, j = path[:, 0], path[:, 1]
-            path_similarities = self.self_similarity_matrix[i, j]
-            self._paths.append(Path(path, path_similarities))
-            # Also add the mirrored path
-            # Do not mirror the diagonal
-            if np.all(i == j):
-                continue
-            path_mirrored = np.zeros(path.shape, dtype=np.int32)
-            path_mirrored[:, 0] = j
-            path_mirrored[:, 1] = i
-            self._paths.append(Path(path_mirrored, path_similarities))
-
+        self._paths = _materialize_paths_with_mirror(paths, self.self_similarity_matrix)
         return self._paths
 
     def induced_paths(self, b, e, mask=None):
@@ -251,7 +256,7 @@ class SortedPathArray:
         self.size -= 1  # Decrease size
 
 
-@njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(numba.types.ListType(Path.class_type.instance_type), int32, int32, int32, float32, boolean[:], boolean[:], boolean[:], boolean[:], boolean), cache=True)
+@njit(cache=True)
 def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False): 
     fitnesses = []
     # n is used for coverage normalization 

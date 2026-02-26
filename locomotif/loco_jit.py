@@ -2,10 +2,11 @@ import numpy as np
 
 
 ### JIT
-from numba import int32, float64, float32, boolean
+from numba import int32, int8, float64, float32, boolean
 from numba import njit
 from numba.types import List, Array
 from numba import prange
+from numba.typed import List as TypedList
 
 @njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
@@ -36,11 +37,24 @@ def max3(a, b, c):
         else:
             return c
         
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+@njit
+def _best_predecessor(a, b, c):
+    if a >= b:
+        if a >= c:
+            return a, np.int8(0)
+        return c, np.int8(2)
+    if b >= c:
+        return b, np.int8(1)
+    return c, np.int8(2)
+
+
+@njit(cache=True)
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
 
     for i in range(n):
 
@@ -50,20 +64,41 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
         for j in range(j_start, j_end):
 
             sim = sm[i, j]
+            ii = i + 2
+            jj = j + 2
 
-            max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
-
+            pred_score, direction = _best_predecessor(csm[ii - 1, jj - 1], csm[ii - 2, jj - 1], csm[ii - 1, jj - 2])
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
+                val = delta_m * pred_score - delta_a
             else:
-                csm[i + 2, j + 2] = max(0, sim + max_cs)
-    return csm
+                val = sim + pred_score
 
-@njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
+            if val > 0.0:
+                csm[ii, jj] = val
+                bp_dir[ii, jj] = direction
+
+                if direction == 0:
+                    pi, pj = ii - 1, jj - 1
+                elif direction == 1:
+                    pi, pj = ii - 2, jj - 1
+                else:
+                    pi, pj = ii - 1, jj - 2
+
+                if csm[pi, pj] > 0.0:
+                    src_id[ii, jj] = src_id[pi, pj]
+                else:
+                    src_id[ii, jj] = ii * (m + 2) + jj
+
+    return csm, bp_dir, src_id
+
+
+@njit(cache=True)
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
 
     for i in range(n):
 
@@ -73,13 +108,24 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
         for j in range(j_start, j_end):
 
             sim = sm[i, j]
+            ii = i + 2
+            jj = j + 2
+            pred_score = csm[ii - 1, jj - 1]
 
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * csm[i - 1 + 2, j - 1 + 2] - delta_a)
+                val = delta_m * pred_score - delta_a
             else:
-                csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
+                val = sim + pred_score
 
-    return csm
+            if val > 0.0:
+                csm[ii, jj] = val
+                bp_dir[ii, jj] = np.int8(0)
+                if pred_score > 0.0:
+                    src_id[ii, jj] = src_id[ii - 1, jj - 1]
+                else:
+                    src_id[ii, jj] = ii * (m + 2) + jj
+
+    return csm, bp_dir, src_id
 
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
@@ -125,6 +171,30 @@ def best_path_no_warping(csm, mask, i, j):
     return np.array(path, dtype=np.int32)
 
 
+@njit(Array(int32, 2, 'C')(boolean[:, :], int8[:, :], int32, int32), cache=True)
+def best_path_from_backpointers(mask, bp_dir, i, j):
+    path = []
+    while i >= 2 and j >= 2:
+        path.append((i, j))
+
+        direction = bp_dir[i, j]
+        if direction == 0:
+            pi, pj = i - 1, j - 1
+        elif direction == 1:
+            pi, pj = i - 2, j - 1
+        elif direction == 2:
+            pi, pj = i - 1, j - 2
+        else:
+            break
+
+        if mask[pi, pj]:
+            break
+        i, j = pi, pj
+
+    path.reverse()
+    return np.array(path, dtype=np.int32)
+
+
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
 def mask_vicinity(path, mask, vwidth=10):
 
@@ -162,53 +232,58 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
-@njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
+@njit(cache=True)
+def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None):
     # Mask all zeros
     mask = mask | (csm <= 0)
-    
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    start_mask = (~mask) # & (csm >= tau * min_path_length)
-    
+    n, m = csm.shape
+    start_mask = np.zeros((n, m), dtype=np.bool_)
+    for i in range(2, n):
+        for j in range(2, m):
+            if mask[i, j] or csm[i, j] <= 0.0:
+                continue
+            source = src_id[i, j]
+            if source < 0:
+                continue
+            source_i = source // m
+            source_j = source - source_i * m
+            if (i - source_i + 1) >= l_min or (j - source_j + 1) >= l_min:
+                start_mask[i, j] = True
+
     pos_i, pos_j = np.nonzero(start_mask)
-    
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
+    if len(pos_i) == 0:
+        return TypedList.empty_list(int32[:, :])
+
+    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))], dtype=np.float32)
     perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
+    sorted_pos_i = pos_i[perm]
+    sorted_pos_j = pos_j[perm]
 
     k_best = len(sorted_pos_i) - 1
-    paths = []
+    paths = TypedList.empty_list(int32[:, :])
 
     while k_best >= 0:
-
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
 
         while not path_found:
-
-            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
+            while mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
-                
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+
+            i_best = sorted_pos_i[k_best]
+            j_best = sorted_pos_j[k_best]
 
             if i_best < 2 or j_best < 2:
                 return paths
-            
-            if warping:
-                path = best_path_warping(csm, mask, i_best, j_best)
-            else:
-                path = best_path_no_warping(csm, mask, i_best, j_best)
-                
+
+            path = best_path_from_backpointers(mask, bp_dir, i_best, j_best)
             mask = mask_vicinity(path, mask, 0)
-            # mask = mask_path(path, mask)
-            
+
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
                 path_found = True
 
-
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)
-
     return paths
