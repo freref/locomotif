@@ -289,49 +289,64 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
+@njit(cache=True, parallel=True)
+def _collect_candidates_no_sources(csm, mask, src_id, l_min):
+    n, m = csm.shape
+    row_counts = np.zeros(n, dtype=np.int32)
+
+    for i in prange(2, n):
+        cnt = np.int32(0)
+        for j in range(2, m):
+            if mask[i, j] or csm[i, j] <= 0.0:
+                continue
+            source = src_id[i, j]
+            if source < 0:
+                continue
+            si = source // m
+            sj = source - si * m
+            if (i - si + 1) >= l_min or (j - sj + 1) >= l_min:
+                cnt += 1
+        row_counts[i] = cnt
+
+    total = np.int32(0)
+    row_offsets = np.zeros(n, dtype=np.int32)
+    for i in range(2, n):
+        row_offsets[i] = total
+        total += row_counts[i]
+
+    linear_pos = np.empty(total, dtype=np.int32)
+    values = np.empty(total, dtype=np.float32)
+    for i in prange(2, n):
+        cursor = row_offsets[i]
+        for j in range(2, m):
+            if mask[i, j] or csm[i, j] <= 0.0:
+                continue
+            source = src_id[i, j]
+            if source < 0:
+                continue
+            si = source // m
+            sj = source - si * m
+            if (i - si + 1) >= l_min or (j - sj + 1) >= l_min:
+                linear_pos[cursor] = i * m + j
+                values[cursor] = csm[i, j]
+                cursor += 1
+
+    return linear_pos, values
+
+
 @njit(cache=True)
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None):
     # Mask all zeros
     mask = mask | (csm <= 0)
     n, m = csm.shape
-
-    candidate_count = 0
-    for i in range(2, n):
-        for j in range(2, m):
-            if mask[i, j] or csm[i, j] <= 0.0:
-                continue
-            source = src_id[i, j]
-            if source < 0:
-                continue
-            source_i = source // m
-            source_j = source - source_i * m
-            if (i - source_i + 1) >= l_min or (j - source_j + 1) >= l_min:
-                candidate_count += 1
-
+    linear_pos, values = _collect_candidates_no_sources(csm, mask, src_id, l_min)
+    candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
 
-    linear_pos = np.empty(candidate_count, dtype=np.int32)
-    values = np.empty(candidate_count, dtype=np.float32)
-    cursor = 0
-    for i in range(2, n):
-        for j in range(2, m):
-            if mask[i, j] or csm[i, j] <= 0.0:
-                continue
-            source = src_id[i, j]
-            if source < 0:
-                continue
-            source_i = source // m
-            source_j = source - source_i * m
-            if (i - source_i + 1) >= l_min or (j - source_j + 1) >= l_min:
-                linear_pos[cursor] = i * m + j
-                values[cursor] = csm[i, j]
-                cursor += 1
-
-    perm = _radix_argsort_u32(values.view(np.uint32))
-
-    k_best = len(perm) - 1
     paths = TypedList.empty_list(int32[:, :])
+    perm = _radix_argsort_u32(values.view(np.uint32))
+    k_best = len(perm) - 1
 
     while k_best >= 0:
         path = np.empty((0, 0), dtype=np.int32)
@@ -361,4 +376,5 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
 
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)
+
     return paths
