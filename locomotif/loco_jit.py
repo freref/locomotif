@@ -25,19 +25,6 @@ def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0)
     return sm
 
 @njit
-def max3(a, b, c):
-    if a >= b:
-        if a >= c:
-            return a
-        else:
-            return c
-    else:
-        if b >= c:
-            return b
-        else:
-            return c
-        
-@njit
 def _best_predecessor(a, b, c):
     if a >= b:
         if a >= c:
@@ -128,49 +115,6 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     return csm, bp_dir, src_id
 
 
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_warping(csm, mask, i, j):
-    
-    path = []
-    while i >= 2 and j >= 2:
-
-        path.append((i, j))
-
-        maximum = max3(csm[i - 1, j - 1], csm[i - 2, j - 1], csm[i - 1, j - 2])
-
-        if csm[i - 1, j - 1] == maximum:
-            if mask[i - 1, j - 1]:
-                break
-            i, j = i - 1, j - 1
-        elif csm[i - 2, j - 1] == maximum:
-            if mask[i - 2, j - 1]:
-                break
-            i, j = i - 2, j - 1
-        else:
-            if mask[i - 1, j - 2]:
-                break
-            i, j = i - 1, j - 2
-
-    path.reverse()
-    return np.array(path, dtype=np.int32)
-
-@njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
-def best_path_no_warping(csm, mask, i, j):
-    
-    path = []
-    while i >= 2 and j >= 2:
-
-        path.append((i, j))
-
-        if mask[i - 1, j - 1]:
-            break
-
-        i, j = i - 1, j - 1
-
-    path.reverse()
-    return np.array(path, dtype=np.int32)
-
-
 @njit(Array(int32, 2, 'C')(boolean[:, :], int8[:, :], int32, int32), cache=True)
 def best_path_from_backpointers(mask, bp_dir, i, j):
     path = []
@@ -195,9 +139,88 @@ def best_path_from_backpointers(mask, bp_dir, i, j):
     return np.array(path, dtype=np.int32)
 
 
+@njit(cache=True)
+def _trace_path_len_and_start(mask, bp_dir, i, j):
+    length = 0
+    start_i = i
+    start_j = j
+
+    while i >= 2 and j >= 2:
+        length += 1
+        start_i = i
+        start_j = j
+
+        direction = bp_dir[i, j]
+        if direction == 0:
+            pi, pj = i - 1, j - 1
+        elif direction == 1:
+            pi, pj = i - 2, j - 1
+        elif direction == 2:
+            pi, pj = i - 1, j - 2
+        else:
+            break
+
+        if mask[pi, pj]:
+            break
+        i, j = pi, pj
+
+    return length, start_i, start_j
+
+
+@njit(cache=True)
+def _materialize_path_from_backpointers(mask, bp_dir, i, j, length):
+    path = np.empty((length, 2), dtype=np.int32)
+    k = length - 1
+    while i >= 2 and j >= 2 and k >= 0:
+        path[k, 0] = i
+        path[k, 1] = j
+        k -= 1
+
+        direction = bp_dir[i, j]
+        if direction == 0:
+            pi, pj = i - 1, j - 1
+        elif direction == 1:
+            pi, pj = i - 2, j - 1
+        elif direction == 2:
+            pi, pj = i - 1, j - 2
+        else:
+            break
+
+        if mask[pi, pj]:
+            break
+        i, j = pi, pj
+
+    return path
+
+
+@njit(cache=True)
+def _mask_backpointer_path_zero(mask, bp_dir, i, j):
+    while i >= 2 and j >= 2:
+        mask[i, j] = True
+
+        direction = bp_dir[i, j]
+        if direction == 0:
+            pi, pj = i - 1, j - 1
+        elif direction == 1:
+            pi, pj = i - 2, j - 1
+        elif direction == 2:
+            pi, pj = i - 1, j - 2
+        else:
+            break
+
+        if mask[pi, pj]:
+            break
+
+        if direction == 1 or direction == 2:
+            mask[i - 1, j - 1] = True
+
+        i, j = pi, pj
+
+    return mask
+
+
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
 def mask_vicinity(path, mask, vwidth=10):
-
     n, m = mask.shape
     
     for k in range(len(path)-1):
@@ -237,7 +260,8 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     # Mask all zeros
     mask = mask | (csm <= 0)
     n, m = csm.shape
-    start_mask = np.zeros((n, m), dtype=np.bool_)
+
+    candidate_count = 0
     for i in range(2, n):
         for j in range(2, m):
             if mask[i, j] or csm[i, j] <= 0.0:
@@ -248,18 +272,31 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             source_i = source // m
             source_j = source - source_i * m
             if (i - source_i + 1) >= l_min or (j - source_j + 1) >= l_min:
-                start_mask[i, j] = True
+                candidate_count += 1
 
-    pos_i, pos_j = np.nonzero(start_mask)
-    if len(pos_i) == 0:
+    if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
 
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))], dtype=np.float32)
-    perm = np.argsort(values)
-    sorted_pos_i = pos_i[perm]
-    sorted_pos_j = pos_j[perm]
+    linear_pos = np.empty(candidate_count, dtype=np.int32)
+    values = np.empty(candidate_count, dtype=np.float32)
+    cursor = 0
+    for i in range(2, n):
+        for j in range(2, m):
+            if mask[i, j] or csm[i, j] <= 0.0:
+                continue
+            source = src_id[i, j]
+            if source < 0:
+                continue
+            source_i = source // m
+            source_j = source - source_i * m
+            if (i - source_i + 1) >= l_min or (j - source_j + 1) >= l_min:
+                linear_pos[cursor] = i * m + j
+                values[cursor] = csm[i, j]
+                cursor += 1
 
-    k_best = len(sorted_pos_i) - 1
+    perm = np.argsort(values.view(np.uint32))
+
+    k_best = len(perm) - 1
     paths = TypedList.empty_list(int32[:, :])
 
     while k_best >= 0:
@@ -267,22 +304,26 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
         path_found = False
 
         while not path_found:
-            while mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]:
+            linear_idx = linear_pos[perm[k_best]]
+            i_best = linear_idx // m
+            j_best = linear_idx - i_best * m
+            while mask[i_best, j_best]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
-
-            i_best = sorted_pos_i[k_best]
-            j_best = sorted_pos_j[k_best]
+                linear_idx = linear_pos[perm[k_best]]
+                i_best = linear_idx // m
+                j_best = linear_idx - i_best * m
 
             if i_best < 2 or j_best < 2:
                 return paths
 
-            path = best_path_from_backpointers(mask, bp_dir, i_best, j_best)
-            mask = mask_vicinity(path, mask, 0)
-
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+            path_len, start_i, start_j = _trace_path_len_and_start(mask, bp_dir, i_best, j_best)
+            if (i_best - start_i + 1) >= l_min or (j_best - start_j + 1) >= l_min:
+                path = _materialize_path_from_backpointers(mask, bp_dir, i_best, j_best, path_len)
                 path_found = True
+            else:
+                mask = _mask_backpointer_path_zero(mask, bp_dir, i_best, j_best)
 
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)

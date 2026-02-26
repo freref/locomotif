@@ -1,7 +1,7 @@
 import numpy as np
 
 from . import loco
-from .path import Path, project_to_vertical_axis
+from .path import Path
 
 import numba
 from numba import int32, float32, boolean
@@ -80,10 +80,9 @@ class LoCoMotif:
         return lcm
 
     def find_best_paths(self, vwidth=None):
-        vwidth = np.maximum(10, self.l_min // 2)
-        paths = self._loco.find_best_paths(self.l_min, vwidth)
-        self._paths = _materialize_paths_with_mirror(paths, self.self_similarity_matrix)
-        return self._paths
+        from .graph_loco import find_best_paths_graph_for_instance
+
+        return find_best_paths_graph_for_instance(self, vwidth=vwidth)
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
@@ -122,7 +121,7 @@ class LoCoMotif:
             if best_fitness == 0.0:
                 break
 
-            motif_set = [project_to_vertical_axis(induced_path) for induced_path in self.induced_paths(b, e, mask)]
+            motif_set = self.induced_paths(b, e, mask)
             mask = _mask_motif_set(mask, motif_set, overlap)
 
             current_nb += 1
@@ -152,10 +151,12 @@ def _induced_paths(b, e, mask, P):
     for path in P:        
         if b < path.j1 or path.jl < e:
             continue
-        induced_path = path.get_subpath_between_col_indices(b, e-1)
-        b_m, e_m = project_to_vertical_axis(induced_path)
+        kb = path.find_j(b)
+        ke = path.find_j(e - 1)
+        b_m = path[kb][0]
+        e_m = path[ke][0] + 1
         if not np.any(mask[b_m:e_m]):
-            induced_paths.append(induced_path)
+            induced_paths.append((b_m, e_m))
     return induced_paths
 
 from numba.experimental import jitclass
@@ -262,6 +263,12 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
     # n is used for coverage normalization 
     r = len(row_mask)
     c = len(col_mask)
+    row_prefix = np.zeros(r + 1, dtype=np.int32)
+    col_prefix = np.zeros(c + 1, dtype=np.int32)
+    for idx in range(r):
+        row_prefix[idx + 1] = row_prefix[idx] + (1 if row_mask[idx] else 0)
+    for idx in range(c):
+        col_prefix[idx + 1] = col_prefix[idx] + (1 if col_mask[idx] else 0)
 
     # Max number of relevant paths
     max_size = int(np.ceil(r / (l_min // 2 + 1))) 
@@ -287,7 +294,7 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
 
         ### Check initial coincidence with previously discovered motifs
         # For the representative
-        if np.any(col_mask[b_repr:b_repr + l_min - 1]):
+        if col_prefix[b_repr + l_min - 1] - col_prefix[b_repr] > 0:
             continue
 
         # For each of the induced segments
@@ -334,7 +341,7 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
                 ke = path.find_j(e_repr-1)
                 e  = path[ke][0] + 1
                 
-                if np.any(row_mask[es_checked[k]:e]):
+                if row_prefix[e] - row_prefix[es_checked[k]] > 0:
                     Pe[k] = False
                     nb_remaining_paths -= 1
                     continue
