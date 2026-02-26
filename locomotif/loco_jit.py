@@ -219,6 +219,40 @@ def _mask_backpointer_path_zero(mask, bp_dir, i, j):
     return mask
 
 
+@njit(cache=True)
+def _radix_argsort_u32(keys):
+    n = len(keys)
+    idx = np.empty(n, dtype=np.int32)
+    tmp = np.empty(n, dtype=np.int32)
+    for i in range(n):
+        idx[i] = i
+
+    counts = np.empty(256, dtype=np.int32)
+    offsets = np.empty(256, dtype=np.int32)
+
+    for shift in (0, 8, 16, 24):
+        counts[:] = 0
+        for i in range(n):
+            b = np.int32((keys[idx[i]] >> np.uint32(shift)) & np.uint32(255))
+            counts[b] += 1
+
+        total = 0
+        for b in range(256):
+            offsets[b] = total
+            total += counts[b]
+
+        for i in range(n):
+            ii = idx[i]
+            b = np.int32((keys[ii] >> np.uint32(shift)) & np.uint32(255))
+            p = offsets[b]
+            tmp[p] = ii
+            offsets[b] = p + 1
+
+        idx, tmp = tmp, idx
+
+    return idx
+
+
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
 def mask_vicinity(path, mask, vwidth=10):
     n, m = mask.shape
@@ -294,7 +328,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
                 values[cursor] = csm[i, j]
                 cursor += 1
 
-    perm = np.argsort(values.view(np.uint32))
+    perm = _radix_argsort_u32(values.view(np.uint32))
 
     k_best = len(perm) - 1
     paths = TypedList.empty_list(int32[:, :])
