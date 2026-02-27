@@ -77,8 +77,10 @@ class LoCo:
         # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
         mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
-            # First, mask region around the diagional as if the diagonal is already found as a path.
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+            for row_idx in range(mask.shape[0]):
+                col_start = row_idx + vwidth + 1
+                if col_start < mask.shape[1]:
+                    mask[row_idx, col_start:] = False
 
         paths = find_best_paths(
             self._csm,

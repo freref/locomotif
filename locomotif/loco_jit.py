@@ -514,6 +514,14 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             if i_best < 2 or j_best < 2:
                 return paths
 
+            src = src_id[i_best, j_best]
+            if src >= 0:
+                start_i = src // m
+                start_j = src - start_i * m
+                if (i_best - start_i + 1) < l_min and (j_best - start_j + 1) < l_min:
+                    _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
+                    continue
+
             path_len, start_i, start_j = _trace_path_len_and_start_flat(mask_flat, bp_flat, m, i_best, j_best)
             if (i_best - start_i + 1) >= l_min or (j_best - start_j + 1) >= l_min:
                 path = _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i_best, j_best, path_len)

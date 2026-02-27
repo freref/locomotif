@@ -15,7 +15,10 @@ def find_best_paths_graph_for_instance(lcm, vwidth=None):
 
     mask = np.full(loco_obj._csm.shape, loco_obj._symmetric)
     if loco_obj._symmetric:
-        mask[np.triu_indices(len(mask), k=vwidth + 1)] = False
+        for row_idx in range(mask.shape[0]):
+            col_start = row_idx + vwidth + 1
+            if col_start < mask.shape[1]:
+                mask[row_idx, col_start:] = False
 
     raw_paths = loco_jit.find_best_paths(
         loco_obj._csm,
