@@ -42,6 +42,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
     src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
+    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -73,10 +74,11 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
 
                 if csm[pi, pj] > 0.0:
                     src_id[ii, jj] = src_id[pi, pj]
+                    dist[ii, jj] = dist[pi, pj] + 1
                 else:
                     src_id[ii, jj] = ii * (m + 2) + jj
 
-    return csm, bp_dir, src_id
+    return csm, bp_dir, src_id, dist
 
 
 @njit(cache=True)
@@ -86,6 +88,7 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
     src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
+    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -109,10 +112,11 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
                 bp_dir[ii, jj] = np.int8(0)
                 if pred_score > 0.0:
                     src_id[ii, jj] = src_id[ii - 1, jj - 1]
+                    dist[ii, jj] = dist[ii - 1, jj - 1] + 1
                 else:
                     src_id[ii, jj] = ii * (m + 2) + jj
 
-    return csm, bp_dir, src_id
+    return csm, bp_dir, src_id, dist
 
 
 @njit(Array(int32, 2, 'C')(boolean[:, :], int8[:, :], int32, int32), cache=True)
@@ -480,14 +484,48 @@ def _collect_positive_candidates(csm, mask):
     return linear_pos, values
 
 
+@njit(cache=True, parallel=True)
+def _collect_positive_candidates_pruned(csm, mask, dist, min_dist):
+    n, m = csm.shape
+    row_counts = np.zeros(n, dtype=np.int32)
+
+    for i in prange(2, n):
+        cnt = np.int32(0)
+        for j in range(2, m):
+            if not mask[i, j] and csm[i, j] > 0.0 and dist[i, j] >= min_dist:
+                cnt += 1
+        row_counts[i] = cnt
+
+    total = np.int32(0)
+    row_offsets = np.zeros(n, dtype=np.int32)
+    for i in range(2, n):
+        row_offsets[i] = total
+        total += row_counts[i]
+
+    linear_pos = np.empty(total, dtype=np.int32)
+    values = np.empty(total, dtype=np.float32)
+    for i in prange(2, n):
+        cursor = row_offsets[i]
+        for j in range(2, m):
+            if not mask[i, j] and csm[i, j] > 0.0 and dist[i, j] >= min_dist:
+                linear_pos[cursor] = i * m + j
+                values[cursor] = csm[i, j]
+                cursor += 1
+
+    return linear_pos, values
+
+
 @njit(cache=True)
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None):
+def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None, dist=None):
     # Mask all zeros
     mask = mask | (csm <= 0)
     n, m = csm.shape
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m)
-    linear_pos, values = _collect_positive_candidates(csm, mask)
+    if dist is None:
+        linear_pos, values = _collect_positive_candidates(csm, mask)
+    else:
+        linear_pos, values = _collect_positive_candidates_pruned(csm, mask, dist, np.int32(l_min // 2))
     candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])

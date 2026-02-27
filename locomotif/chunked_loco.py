@@ -211,14 +211,14 @@ def _find_paths_wrapper(args):
     Tr, Tc, l_min, vwidth, gamma, tau, delta_a, delta_m, warping, only_triu, diag_offset = args
     sm = loco_jit.similarity_matrix_ndim(Tr, Tc, gamma=gamma, only_triu=only_triu, diag_offset=diag_offset)
     if warping:
-        csm = loco_jit.cumulative_similarity_matrix_warping(sm=sm, tau=tau, delta_a=delta_a, delta_m=delta_m, only_triu=only_triu, diag_offset=diag_offset)
+        csm, bp_dir, src_id, dist = loco_jit.cumulative_similarity_matrix_warping(sm=sm, tau=tau, delta_a=delta_a, delta_m=delta_m, only_triu=only_triu, diag_offset=diag_offset)
     else:
-        csm = loco_jit.cumulative_similarity_matrix_no_warping(sm=sm, tau=tau, delta_a=delta_a, delta_m=delta_m, only_triu=only_triu, diag_offset=diag_offset)
+        csm, bp_dir, src_id, dist = loco_jit.cumulative_similarity_matrix_no_warping(sm=sm, tau=tau, delta_a=delta_a, delta_m=delta_m, only_triu=only_triu, diag_offset=diag_offset)
     del sm
     gc.collect()
     mask = np.full(csm.shape, False)
     ## TODO: CSM can be removed after sorting the start indices (only the order of non-zero cells matters).
-    P = loco_jit.find_best_paths(csm, mask, tau=tau, l_min=l_min, vwidth=vwidth, warping=warping)
+    P = loco_jit.find_best_paths(csm, mask, tau=tau, l_min=l_min, vwidth=vwidth, warping=warping, bp_dir=bp_dir, src_id=src_id, dist=dist)
     P = [path-2 for path in P]
     del csm
     del mask

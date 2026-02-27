@@ -29,6 +29,7 @@ class LoCo:
         self._csm = None
         self._bp_dir = None
         self._src_id = None
+        self._dist = None
         # Local warping paths
         self._paths = None
 
@@ -54,7 +55,7 @@ class LoCo:
     def calculate_cumulative_similarity_matrix(self):
         if self._sm is None:
             self.calculate_similarity_matrix()            
-        self._csm, self._bp_dir, self._src_id = cumulative_similarity_matrix(
+        self._csm, self._bp_dir, self._src_id, self._dist = cumulative_similarity_matrix(
             self._sm,
             tau=self.tau,
             delta_a=self.delta_a,
@@ -91,6 +92,7 @@ class LoCo:
             warping=self.warping,
             bp_dir=self._bp_dir,
             src_id=self._src_id,
+            dist=self._dist,
         )
         paths = [np.ascontiguousarray(path - 2, dtype=np.int32) for path in paths]
 
@@ -148,8 +150,8 @@ def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=
     else:
         return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
 
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None):
-    paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping, bp_dir, src_id)
+def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None, dist=None):
+    paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping, bp_dir, src_id, dist)
     return paths
 
 def ensure_multivariate(ts):
