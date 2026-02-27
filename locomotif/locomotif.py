@@ -30,6 +30,221 @@ def _materialize_paths_with_mirror(raw_paths, sm):
             out.append(Path(mirrored, sims))
     return out
 
+
+class _LazyPathCollection:
+
+    def __init__(self, path_data):
+        self._path_data = path_data
+
+    def __len__(self):
+        return len(self._path_data[7])
+
+    def __iter__(self):
+        for idx in range(len(self)):
+            yield self[idx]
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self[i] for i in range(*idx.indices(len(self)))]
+        return _materialize_path_from_graph(self._path_data, idx)
+
+
+def _materialize_path_from_graph(path_data, idx):
+    path_starts, _, cum_offsets, node_rows, node_cols, _, cumulative, _, _, _ = path_data
+    start = int(path_starts[idx])
+    end = int(path_starts[idx + 1])
+    path = np.empty((end - start, 2), dtype=np.int32)
+    path[:, 0] = node_rows[start:end]
+    path[:, 1] = node_cols[start:end]
+    cum_start = int(cum_offsets[idx])
+    similarities = cumulative[cum_start + 1 : cum_start + 1 + (end - start)] - cumulative[cum_start : cum_start + (end - start)]
+    return Path(path, similarities.astype(np.float32))
+
+
+@njit(cache=True)
+def _build_compact_path_graph(raw_paths, sm, symmetric):
+    diagonal_len = sm.shape[0] if symmetric else 0
+    total_paths = 1 if symmetric else 0
+    total_nodes = diagonal_len
+    total_cols = diagonal_len
+    total_cum = diagonal_len + 1 if symmetric else 0
+
+    for raw_path in raw_paths:
+        path_len = len(raw_path)
+        total_paths += 1
+        total_nodes += path_len
+        total_cols += raw_path[path_len - 1, 1] - raw_path[0, 1] + 1
+        total_cum += path_len + 1
+
+        is_diagonal = True
+        for k in range(path_len):
+            if raw_path[k, 0] != raw_path[k, 1]:
+                is_diagonal = False
+                break
+        if not is_diagonal:
+            total_paths += 1
+            total_nodes += path_len
+            total_cols += raw_path[path_len - 1, 0] - raw_path[0, 0] + 1
+            total_cum += path_len + 1
+
+    path_starts = np.empty(total_paths + 1, dtype=np.int32)
+    col_offsets = np.empty(total_paths + 1, dtype=np.int32)
+    cum_offsets = np.empty(total_paths + 1, dtype=np.int32)
+    node_rows = np.empty(total_nodes, dtype=np.int32)
+    node_cols = np.empty(total_nodes, dtype=np.int32)
+    index_j = np.empty(total_cols, dtype=np.int32)
+    cumulative = np.empty(total_cum, dtype=np.float32)
+    path_j1 = np.empty(total_paths, dtype=np.int32)
+    path_jl = np.empty(total_paths, dtype=np.int32)
+
+    path_idx = 0
+    node_cursor = 0
+    col_cursor = 0
+    cum_cursor = 0
+
+    if symmetric:
+        path_starts[path_idx] = node_cursor
+        col_offsets[path_idx] = col_cursor
+        cum_offsets[path_idx] = cum_cursor
+        path_j1[path_idx] = 0
+        path_jl[path_idx] = diagonal_len
+        cumulative[cum_cursor] = 0.0
+        for k in range(diagonal_len):
+            node_rows[node_cursor + k] = k
+            node_cols[node_cursor + k] = k
+            index_j[col_cursor + k] = k
+            cumulative[cum_cursor + k + 1] = cumulative[cum_cursor + k] + sm[k, k]
+        path_idx += 1
+        node_cursor += diagonal_len
+        col_cursor += diagonal_len
+        cum_cursor += diagonal_len + 1
+
+    for raw_path in raw_paths:
+        path_idx, node_cursor, col_cursor, cum_cursor = _append_compact_path(
+            raw_path,
+            sm,
+            False,
+            path_idx,
+            node_cursor,
+            col_cursor,
+            cum_cursor,
+            path_starts,
+            col_offsets,
+            cum_offsets,
+            node_rows,
+            node_cols,
+            index_j,
+            cumulative,
+            path_j1,
+            path_jl,
+        )
+
+        is_diagonal = True
+        for k in range(len(raw_path)):
+            if raw_path[k, 0] != raw_path[k, 1]:
+                is_diagonal = False
+                break
+        if not is_diagonal:
+            path_idx, node_cursor, col_cursor, cum_cursor = _append_compact_path(
+                raw_path,
+                sm,
+                True,
+                path_idx,
+                node_cursor,
+                col_cursor,
+                cum_cursor,
+                path_starts,
+                col_offsets,
+                cum_offsets,
+                node_rows,
+                node_cols,
+                index_j,
+                cumulative,
+                path_j1,
+                path_jl,
+            )
+
+    path_starts[path_idx] = node_cursor
+    col_offsets[path_idx] = col_cursor
+    cum_offsets[path_idx] = cum_cursor
+    start_order = np.argsort(path_j1).astype(np.int32)
+    return (
+        path_starts,
+        col_offsets,
+        cum_offsets,
+        node_rows,
+        node_cols,
+        index_j,
+        cumulative,
+        path_j1,
+        path_jl,
+        start_order,
+    )
+
+
+@njit(cache=True)
+def _append_compact_path(
+    raw_path,
+    sm,
+    mirrored,
+    path_idx,
+    node_cursor,
+    col_cursor,
+    cum_cursor,
+    path_starts,
+    col_offsets,
+    cum_offsets,
+    node_rows,
+    node_cols,
+    index_j,
+    cumulative,
+    path_j1,
+    path_jl,
+):
+    path_len = len(raw_path)
+    if mirrored:
+        first_j = raw_path[0, 0] - 2
+        last_j = raw_path[path_len - 1, 0] - 2
+    else:
+        first_j = raw_path[0, 1] - 2
+        last_j = raw_path[path_len - 1, 1] - 2
+
+    col_len = last_j - first_j + 1
+    path_starts[path_idx] = node_cursor
+    col_offsets[path_idx] = col_cursor
+    cum_offsets[path_idx] = cum_cursor
+    path_j1[path_idx] = first_j
+    path_jl[path_idx] = last_j + 1
+
+    for t in range(col_len):
+        index_j[col_cursor + t] = 0
+
+    cumulative[cum_cursor] = 0.0
+    prev_j = first_j
+
+    for k in range(path_len):
+        sim_row = raw_path[k, 0] - 2
+        sim_col = raw_path[k, 1] - 2
+        if mirrored:
+            row = sim_col
+            col = sim_row
+        else:
+            row = sim_row
+            col = sim_col
+
+        node_rows[node_cursor + k] = row
+        node_cols[node_cursor + k] = col
+        cumulative[cum_cursor + k + 1] = cumulative[cum_cursor + k] + sm[sim_row, sim_col]
+
+        if k > 0 and col != prev_j:
+            start = col_cursor + (prev_j - first_j) + 1
+            end = col_cursor + (col - first_j) + 1
+            for t in range(start, end):
+                index_j[t] = k
+            prev_j = col
+
+    return path_idx + 1, node_cursor + path_len, col_cursor + col_len, cum_cursor + path_len + 1
+
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
@@ -69,6 +284,8 @@ class LoCoMotif:
         # LoCo instance
         self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, warping=warping)
         self._paths = None
+        self._path_data = None
+        self._path_collection = None
 
     @classmethod
     def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True):
@@ -87,11 +304,14 @@ class LoCoMotif:
     def induced_paths(self, b, e, mask=None):
         if mask is None:
             mask = np.full(len(self.ts), False)
+        if self._path_data is not None:
+            induced = _induced_paths_graph(b, e, mask, *self._path_data[:9])
+            return [(int(segment[0]), int(segment[1])) for segment in induced]
         return _induced_paths(b, e, mask, self._paths)
 
     # iteratively finds the best motif set
     def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
-        if self._paths is None:
+        if self._paths is None and self._path_data is None:
             self.find_best_paths()
             
         n = len(self.ts)
@@ -116,7 +336,34 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
 
-            (b, e), best_fitness, fitnesses = _find_best_candidate(self._paths, n, self.l_min, self.l_max, overlap, mask, mask, start_mask, end_mask, keep_fitnesses=keep_fitnesses)
+            if self._path_data is not None:
+                best_candidate, best_fitness, fitnesses = _find_best_candidate_graph(
+                    n,
+                    self.l_min,
+                    self.l_max,
+                    overlap,
+                    mask,
+                    mask,
+                    start_mask,
+                    end_mask,
+                    *self._path_data,
+                    keep_fitnesses=keep_fitnesses,
+                )
+            else:
+                best_candidate, best_fitness, fitnesses = _find_best_candidate(
+                    self._paths,
+                    n,
+                    self.l_min,
+                    self.l_max,
+                    overlap,
+                    mask,
+                    mask,
+                    start_mask,
+                    end_mask,
+                    keep_fitnesses=keep_fitnesses,
+                )
+
+            b, e = best_candidate
 
             if best_fitness == 0.0:
                 break
@@ -129,6 +376,8 @@ class LoCoMotif:
             
     @property
     def local_warping_paths(self):
+        if self._path_collection is not None:
+            return self._path_collection
         return self._paths
     
     @property
@@ -158,6 +407,49 @@ def _induced_paths(b, e, mask, P):
         if not np.any(mask[b_m:e_m]):
             induced_paths.append((b_m, e_m))
     return induced_paths
+
+
+@njit(cache=True)
+def _induced_paths_graph(b, e, mask, path_starts, col_offsets, cum_offsets, node_rows, node_cols, index_j, cumulative, path_j1, path_jl):
+    count = 0
+    for path_idx in range(len(path_j1)):
+        if b < path_j1[path_idx] or path_jl[path_idx] < e:
+            continue
+        col_base = col_offsets[path_idx]
+        node_base = path_starts[path_idx]
+        kb = index_j[col_base + (b - path_j1[path_idx])]
+        ke = index_j[col_base + (e - 1 - path_j1[path_idx])]
+        b_m = node_rows[node_base + kb]
+        e_m = node_rows[node_base + ke] + 1
+        blocked = False
+        for pos in range(b_m, e_m):
+            if mask[pos]:
+                blocked = True
+                break
+        if not blocked:
+            count += 1
+
+    out = np.empty((count, 2), dtype=np.int32)
+    write_idx = 0
+    for path_idx in range(len(path_j1)):
+        if b < path_j1[path_idx] or path_jl[path_idx] < e:
+            continue
+        col_base = col_offsets[path_idx]
+        node_base = path_starts[path_idx]
+        kb = index_j[col_base + (b - path_j1[path_idx])]
+        ke = index_j[col_base + (e - 1 - path_j1[path_idx])]
+        b_m = node_rows[node_base + kb]
+        e_m = node_rows[node_base + ke] + 1
+        blocked = False
+        for pos in range(b_m, e_m):
+            if mask[pos]:
+                blocked = True
+                break
+        if not blocked:
+            out[write_idx, 0] = b_m
+            out[write_idx, 1] = e_m
+            write_idx += 1
+    return out
 
 from numba.experimental import jitclass
 @jitclass([
@@ -395,4 +687,174 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
 
     fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
 
+    return best_candidate, best_fitness, fitnesses
+
+
+@njit(cache=True)
+def _find_best_candidate_graph(
+    n,
+    l_min,
+    l_max,
+    nu,
+    row_mask,
+    col_mask,
+    start_mask,
+    end_mask,
+    path_starts,
+    col_offsets,
+    cum_offsets,
+    node_rows,
+    node_cols,
+    index_j,
+    cumulative,
+    path_j1,
+    path_jl,
+    start_order,
+    keep_fitnesses=False,
+):
+    fitnesses = []
+    r = len(row_mask)
+    c = len(col_mask)
+    row_prefix = np.zeros(r + 1, dtype=np.int32)
+    col_prefix = np.zeros(c + 1, dtype=np.int32)
+    for idx in range(r):
+        row_prefix[idx + 1] = row_prefix[idx] + (1 if row_mask[idx] else 0)
+    for idx in range(c):
+        col_prefix[idx + 1] = col_prefix[idx] + (1 if col_mask[idx] else 0)
+
+    max_size = max(2, int(np.ceil(r / (l_min // 2 + 1))))
+    active_paths = np.empty(max_size, dtype=np.int32)
+    active_keys = np.empty(max_size, dtype=np.int32)
+    active_size = 0
+    next_start_idx = 0
+
+    Pe = np.zeros(max_size, dtype=np.bool_)
+    es_checked = np.zeros(max_size, dtype=np.int32)
+
+    best_fitness = 0.0
+    best_candidate = (0, 0)
+
+    for b_repr in range(c - l_min + 1):
+        next_j = b_repr
+
+        write_idx = 0
+        for active_idx in range(active_size):
+            path_idx = active_paths[active_idx]
+            if path_jl[path_idx] != next_j:
+                active_paths[write_idx] = path_idx
+                write_idx += 1
+        active_size = write_idx
+
+        for active_idx in range(active_size):
+            path_idx = active_paths[active_idx]
+            col_base = col_offsets[path_idx]
+            node_base = path_starts[path_idx]
+            key_idx = index_j[col_base + (next_j - path_j1[path_idx])]
+            active_keys[active_idx] = node_rows[node_base + key_idx]
+
+        while next_start_idx < len(start_order):
+            path_idx = start_order[next_start_idx]
+            if path_j1[path_idx] != next_j:
+                break
+            col_base = col_offsets[path_idx]
+            node_base = path_starts[path_idx]
+            key_idx = index_j[col_base]
+            key = node_rows[node_base + key_idx]
+            insert_at = np.searchsorted(active_keys[:active_size], key)
+            active_paths[insert_at + 1 : active_size + 1] = active_paths[insert_at:active_size]
+            active_keys[insert_at + 1 : active_size + 1] = active_keys[insert_at:active_size]
+            active_paths[insert_at] = path_idx
+            active_keys[insert_at] = key
+            active_size += 1
+            next_start_idx += 1
+
+        nb_paths = active_size
+        if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
+            continue
+
+        if col_prefix[b_repr + l_min - 1] - col_prefix[b_repr] > 0:
+            continue
+
+        Pe[:nb_paths] = True
+        es_checked[:nb_paths] = active_keys[:nb_paths]
+        nb_remaining_paths = nb_paths
+
+        for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
+            if col_mask[e_repr - 1]:
+                break
+            if not end_mask[e_repr - 1]:
+                continue
+
+            score = 0.0
+            total_length = 0.0
+            total_path_length = 0.0
+            total_overlap = 0.0
+            l_prev = 0
+            e_prev = 0
+            too_much_overlap = False
+
+            for active_idx in range(nb_paths):
+                if nb_remaining_paths < 2:
+                    break
+                if not Pe[active_idx]:
+                    continue
+
+                path_idx = active_paths[active_idx]
+                if path_jl[path_idx] < e_repr:
+                    Pe[active_idx] = False
+                    nb_remaining_paths -= 1
+                    continue
+
+                col_base = col_offsets[path_idx]
+                node_base = path_starts[path_idx]
+                cum_base = cum_offsets[path_idx]
+                kb = index_j[col_base + (b_repr - path_j1[path_idx])]
+                ke = index_j[col_base + (e_repr - 1 - path_j1[path_idx])]
+                b = node_rows[node_base + kb]
+                e = node_rows[node_base + ke] + 1
+
+                if row_prefix[e] - row_prefix[es_checked[active_idx]] > 0:
+                    Pe[active_idx] = False
+                    nb_remaining_paths -= 1
+                    continue
+                es_checked[active_idx] = e
+
+                l = e - b
+                if active_idx > 0:
+                    overlap = max(0, e_prev - b)
+                    if nu * min(l, l_prev) < overlap:
+                        too_much_overlap = True
+                        break
+                    total_overlap += overlap
+
+                total_length += l
+                total_path_length += ke - kb + 1
+                score += cumulative[cum_base + ke + 1] - cumulative[cum_base + kb]
+
+                l_prev = l
+                e_prev = e
+
+            if nb_remaining_paths < 2:
+                break
+            if too_much_overlap:
+                continue
+
+            l_repr = e_repr - b_repr
+            n_score = (score - l_repr) / total_path_length
+            n_coverage = (total_length - total_overlap - l_repr) / float(n)
+
+            fit = 0.0
+            if n_coverage != 0 or n_score != 0:
+                fit = 2 * (n_coverage * n_score) / (n_coverage + n_score)
+            if fit == 0.0:
+                continue
+
+            if fit > best_fitness:
+                best_candidate = (b_repr, e_repr)
+                best_fitness = fit
+
+            if keep_fitnesses:
+                fitnesses.append((b_repr, e_repr, fit, n_coverage, n_score))
+
+    fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
     return best_candidate, best_fitness, fitnesses

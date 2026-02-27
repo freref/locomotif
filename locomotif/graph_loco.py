@@ -1,6 +1,6 @@
 import numpy as np
 
-from .locomotif import get_locomotif_instance, _materialize_paths_with_mirror
+from .locomotif import _LazyPathCollection, _build_compact_path_graph, get_locomotif_instance
 from . import loco_jit
 
 
@@ -28,13 +28,10 @@ def find_best_paths_graph_for_instance(lcm, vwidth=None):
         loco_obj._src_id,
     )
 
-    paths = [np.ascontiguousarray(path - 2, dtype=np.int32) for path in raw_paths]
-    if loco_obj._symmetric:
-        diagonal = np.ascontiguousarray(np.tile(np.arange(len(loco_obj.ts), dtype=np.int32), (2, 1)).T, dtype=np.int32)
-        paths.insert(0, diagonal)
-
-    lcm._paths = _materialize_paths_with_mirror(paths, lcm.self_similarity_matrix)
-    return lcm._paths
+    lcm._path_data = _build_compact_path_graph(raw_paths, lcm.self_similarity_matrix, loco_obj._symmetric)
+    lcm._path_collection = _LazyPathCollection(lcm._path_data)
+    lcm._paths = None
+    return lcm._path_collection
 
 
 def apply_locomotif_graph(
