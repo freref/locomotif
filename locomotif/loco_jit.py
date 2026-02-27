@@ -41,7 +41,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
-    src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
+    src_id = np.full((n + 2, m + 2), np.int64(-1), dtype=np.int64)
     dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
@@ -76,7 +76,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
                     src_id[ii, jj] = src_id[pi, pj]
                     dist[ii, jj] = dist[pi, pj] + 1
                 else:
-                    src_id[ii, jj] = ii * (m + 2) + jj
+                    src_id[ii, jj] = np.int64(ii) * np.int64(m + 2) + np.int64(jj)
 
     return csm, bp_dir, src_id, dist
 
@@ -87,7 +87,7 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
-    src_id = np.full((n + 2, m + 2), np.int32(-1), dtype=np.int32)
+    src_id = np.full((n + 2, m + 2), np.int64(-1), dtype=np.int64)
     dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
@@ -114,7 +114,7 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
                     src_id[ii, jj] = src_id[ii - 1, jj - 1]
                     dist[ii, jj] = dist[ii - 1, jj - 1] + 1
                 else:
-                    src_id[ii, jj] = ii * (m + 2) + jj
+                    src_id[ii, jj] = np.int64(ii) * np.int64(m + 2) + np.int64(jj)
 
     return csm, bp_dir, src_id, dist
 
@@ -333,10 +333,10 @@ def _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i, j):
 def _radix_sort_u32_with_payload(keys, payload):
     n = len(keys)
     tmp_keys = np.empty(n, dtype=np.uint32)
-    tmp_payload = np.empty(n, dtype=np.int32)
+    tmp_payload = np.empty(n, dtype=payload.dtype)
 
-    counts = np.empty(65536, dtype=np.int32)
-    offsets = np.empty(65536, dtype=np.int32)
+    counts = np.empty(65536, dtype=np.int64)
+    offsets = np.empty(65536, dtype=np.int64)
     mask = np.uint32(65535)
 
     for shift in (0, 16):
@@ -345,7 +345,7 @@ def _radix_sort_u32_with_payload(keys, payload):
             b = np.int32((keys[i] >> np.uint32(shift)) & mask)
             counts[b] += 1
 
-        total = 0
+        total = np.int64(0)
         for b in range(65536):
             offsets[b] = total
             total += counts[b]
@@ -465,19 +465,19 @@ def _collect_positive_candidates(csm, mask):
                 cnt += 1
         row_counts[i] = cnt
 
-    total = np.int32(0)
-    row_offsets = np.zeros(n, dtype=np.int32)
+    total = np.int64(0)
+    row_offsets = np.zeros(n, dtype=np.int64)
     for i in range(2, n):
         row_offsets[i] = total
         total += row_counts[i]
 
-    linear_pos = np.empty(total, dtype=np.int32)
+    linear_pos = np.empty(total, dtype=np.int64)
     values = np.empty(total, dtype=np.float32)
     for i in prange(2, n):
         cursor = row_offsets[i]
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0:
-                linear_pos[cursor] = i * m + j
+                linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
                 values[cursor] = csm[i, j]
                 cursor += 1
 
@@ -496,19 +496,19 @@ def _collect_positive_candidates_pruned(csm, mask, dist, min_dist):
                 cnt += 1
         row_counts[i] = cnt
 
-    total = np.int32(0)
-    row_offsets = np.zeros(n, dtype=np.int32)
+    total = np.int64(0)
+    row_offsets = np.zeros(n, dtype=np.int64)
     for i in range(2, n):
         row_offsets[i] = total
         total += row_counts[i]
 
-    linear_pos = np.empty(total, dtype=np.int32)
+    linear_pos = np.empty(total, dtype=np.int64)
     values = np.empty(total, dtype=np.float32)
     for i in prange(2, n):
         cursor = row_offsets[i]
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0 and dist[i, j] >= min_dist:
-                linear_pos[cursor] = i * m + j
+                linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
                 values[cursor] = csm[i, j]
                 cursor += 1
 
@@ -546,16 +546,16 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
                     return paths
                 linear_idx = linear_pos[k_best]
 
-            i_best = linear_idx // m
-            j_best = linear_idx - i_best * m
+            i_best = linear_idx // np.int64(m)
+            j_best = linear_idx - i_best * np.int64(m)
 
             if i_best < 2 or j_best < 2:
                 return paths
 
             src = src_id[i_best, j_best]
             if src >= 0:
-                start_i = src // m
-                start_j = src - start_i * m
+                start_i = src // np.int64(m)
+                start_j = src - start_i * np.int64(m)
                 if (i_best - start_i + 1) < l_min and (j_best - start_j + 1) < l_min:
                     _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
                     continue

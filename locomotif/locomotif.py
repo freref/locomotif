@@ -65,9 +65,9 @@ def _materialize_path_from_graph(path_data, idx):
 def _build_compact_path_graph(raw_paths, sm, symmetric):
     diagonal_len = sm.shape[0] if symmetric else 0
     total_paths = 1 if symmetric else 0
-    total_nodes = diagonal_len
-    total_cols = diagonal_len
-    total_cum = diagonal_len + 1 if symmetric else 0
+    total_nodes = np.int64(diagonal_len)
+    total_cols = np.int64(diagonal_len)
+    total_cum = np.int64(diagonal_len + 1) if symmetric else np.int64(0)
 
     for raw_path in raw_paths:
         path_len = len(raw_path)
@@ -87,9 +87,9 @@ def _build_compact_path_graph(raw_paths, sm, symmetric):
             total_cols += raw_path[path_len - 1, 0] - raw_path[0, 0] + 1
             total_cum += path_len + 1
 
-    path_starts = np.empty(total_paths + 1, dtype=np.int32)
-    col_offsets = np.empty(total_paths + 1, dtype=np.int32)
-    cum_offsets = np.empty(total_paths + 1, dtype=np.int32)
+    path_starts = np.empty(total_paths + 1, dtype=np.int64)
+    col_offsets = np.empty(total_paths + 1, dtype=np.int64)
+    cum_offsets = np.empty(total_paths + 1, dtype=np.int64)
     node_rows = np.empty(total_nodes, dtype=np.int32)
     node_cols = np.empty(total_nodes, dtype=np.int32)
     index_j = np.empty(total_cols, dtype=np.int32)
@@ -98,9 +98,9 @@ def _build_compact_path_graph(raw_paths, sm, symmetric):
     path_jl = np.empty(total_paths, dtype=np.int32)
 
     path_idx = 0
-    node_cursor = 0
-    col_cursor = 0
-    cum_cursor = 0
+    node_cursor = np.int64(0)
+    col_cursor = np.int64(0)
+    cum_cursor = np.int64(0)
 
     if symmetric:
         path_starts[path_idx] = node_cursor
@@ -110,10 +110,10 @@ def _build_compact_path_graph(raw_paths, sm, symmetric):
         path_jl[path_idx] = diagonal_len
         cumulative[cum_cursor] = 0.0
         for k in range(diagonal_len):
-            node_rows[node_cursor + k] = k
-            node_cols[node_cursor + k] = k
-            index_j[col_cursor + k] = k
-            cumulative[cum_cursor + k + 1] = cumulative[cum_cursor + k] + sm[k, k]
+            node_rows[node_cursor + np.int64(k)] = k
+            node_cols[node_cursor + np.int64(k)] = k
+            index_j[col_cursor + np.int64(k)] = k
+            cumulative[cum_cursor + np.int64(k + 1)] = cumulative[cum_cursor + np.int64(k)] + sm[k, k]
         path_idx += 1
         node_cursor += diagonal_len
         col_cursor += diagonal_len
@@ -217,7 +217,7 @@ def _append_compact_path(
     path_jl[path_idx] = last_j + 1
 
     for t in range(col_len):
-        index_j[col_cursor + t] = 0
+        index_j[col_cursor + np.int64(t)] = 0
 
     cumulative[cum_cursor] = 0.0
     prev_j = first_j
@@ -232,13 +232,13 @@ def _append_compact_path(
             row = sim_row
             col = sim_col
 
-        node_rows[node_cursor + k] = row
-        node_cols[node_cursor + k] = col
-        cumulative[cum_cursor + k + 1] = cumulative[cum_cursor + k] + sm[sim_row, sim_col]
+        node_rows[node_cursor + np.int64(k)] = row
+        node_cols[node_cursor + np.int64(k)] = col
+        cumulative[cum_cursor + np.int64(k + 1)] = cumulative[cum_cursor + np.int64(k)] + sm[sim_row, sim_col]
 
         if k > 0 and col != prev_j:
-            start = col_cursor + (prev_j - first_j) + 1
-            end = col_cursor + (col - first_j) + 1
+            start = col_cursor + np.int64(prev_j - first_j) + 1
+            end = col_cursor + np.int64(col - first_j) + 1
             for t in range(start, end):
                 index_j[t] = k
             prev_j = col
@@ -417,10 +417,10 @@ def _induced_paths_graph(b, e, mask, path_starts, col_offsets, cum_offsets, node
             continue
         col_base = col_offsets[path_idx]
         node_base = path_starts[path_idx]
-        kb = index_j[col_base + (b - path_j1[path_idx])]
-        ke = index_j[col_base + (e - 1 - path_j1[path_idx])]
-        b_m = node_rows[node_base + kb]
-        e_m = node_rows[node_base + ke] + 1
+        kb = index_j[col_base + np.int64(b - path_j1[path_idx])]
+        ke = index_j[col_base + np.int64(e - 1 - path_j1[path_idx])]
+        b_m = node_rows[node_base + np.int64(kb)]
+        e_m = node_rows[node_base + np.int64(ke)] + 1
         blocked = False
         for pos in range(b_m, e_m):
             if mask[pos]:
@@ -436,10 +436,10 @@ def _induced_paths_graph(b, e, mask, path_starts, col_offsets, cum_offsets, node
             continue
         col_base = col_offsets[path_idx]
         node_base = path_starts[path_idx]
-        kb = index_j[col_base + (b - path_j1[path_idx])]
-        ke = index_j[col_base + (e - 1 - path_j1[path_idx])]
-        b_m = node_rows[node_base + kb]
-        e_m = node_rows[node_base + ke] + 1
+        kb = index_j[col_base + np.int64(b - path_j1[path_idx])]
+        ke = index_j[col_base + np.int64(e - 1 - path_j1[path_idx])]
+        b_m = node_rows[node_base + np.int64(kb)]
+        e_m = node_rows[node_base + np.int64(ke)] + 1
         blocked = False
         for pos in range(b_m, e_m):
             if mask[pos]:
@@ -749,8 +749,8 @@ def _find_best_candidate_graph(
             path_idx = active_paths[active_idx]
             col_base = col_offsets[path_idx]
             node_base = path_starts[path_idx]
-            key_idx = index_j[col_base + (next_j - path_j1[path_idx])]
-            active_keys[active_idx] = node_rows[node_base + key_idx]
+            key_idx = index_j[col_base + np.int64(next_j - path_j1[path_idx])]
+            active_keys[active_idx] = node_rows[node_base + np.int64(key_idx)]
 
         while next_start_idx < len(start_order):
             path_idx = start_order[next_start_idx]
@@ -759,7 +759,7 @@ def _find_best_candidate_graph(
             col_base = col_offsets[path_idx]
             node_base = path_starts[path_idx]
             key_idx = index_j[col_base]
-            key = node_rows[node_base + key_idx]
+            key = node_rows[node_base + np.int64(key_idx)]
             insert_at = np.searchsorted(active_keys[:active_size], key)
             active_paths[insert_at + 1 : active_size + 1] = active_paths[insert_at:active_size]
             active_keys[insert_at + 1 : active_size + 1] = active_keys[insert_at:active_size]
@@ -808,10 +808,10 @@ def _find_best_candidate_graph(
                 col_base = col_offsets[path_idx]
                 node_base = path_starts[path_idx]
                 cum_base = cum_offsets[path_idx]
-                kb = index_j[col_base + (b_repr - path_j1[path_idx])]
-                ke = index_j[col_base + (e_repr - 1 - path_j1[path_idx])]
-                b = node_rows[node_base + kb]
-                e = node_rows[node_base + ke] + 1
+                kb = index_j[col_base + np.int64(b_repr - path_j1[path_idx])]
+                ke = index_j[col_base + np.int64(e_repr - 1 - path_j1[path_idx])]
+                b = node_rows[node_base + np.int64(kb)]
+                e = node_rows[node_base + np.int64(ke)] + 1
 
                 if row_prefix[e] - row_prefix[es_checked[active_idx]] > 0:
                     Pe[active_idx] = False
@@ -829,7 +829,7 @@ def _find_best_candidate_graph(
 
                 total_length += l
                 total_path_length += ke - kb + 1
-                score += cumulative[cum_base + ke + 1] - cumulative[cum_base + kb]
+                score += cumulative[cum_base + np.int64(ke + 1)] - cumulative[cum_base + np.int64(kb)]
 
                 l_prev = l
                 e_prev = e
