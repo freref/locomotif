@@ -227,23 +227,24 @@ def _radix_argsort_u32(keys):
     for i in range(n):
         idx[i] = i
 
-    counts = np.empty(256, dtype=np.int32)
-    offsets = np.empty(256, dtype=np.int32)
+    counts = np.empty(65536, dtype=np.int32)
+    offsets = np.empty(65536, dtype=np.int32)
+    mask = np.uint32(65535)
 
-    for shift in (0, 8, 16, 24):
+    for shift in (0, 16):
         counts[:] = 0
         for i in range(n):
-            b = np.int32((keys[idx[i]] >> np.uint32(shift)) & np.uint32(255))
+            b = np.int32((keys[idx[i]] >> np.uint32(shift)) & mask)
             counts[b] += 1
 
         total = 0
-        for b in range(256):
+        for b in range(65536):
             offsets[b] = total
             total += counts[b]
 
         for i in range(n):
             ii = idx[i]
-            b = np.int32((keys[ii] >> np.uint32(shift)) & np.uint32(255))
+            b = np.int32((keys[ii] >> np.uint32(shift)) & mask)
             p = offsets[b]
             tmp[p] = ii
             offsets[b] = p + 1
@@ -339,6 +340,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     # Mask all zeros
     mask = mask | (csm <= 0)
     n, m = csm.shape
+    mask_flat = mask.reshape(n * m)
     linear_pos, values = _collect_candidates_no_sources(csm, mask, src_id, l_min)
     candidate_count = len(linear_pos)
     if candidate_count == 0:
@@ -354,15 +356,14 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
 
         while not path_found:
             linear_idx = linear_pos[perm[k_best]]
-            i_best = linear_idx // m
-            j_best = linear_idx - i_best * m
-            while mask[i_best, j_best]:
+            while mask_flat[linear_idx]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
                 linear_idx = linear_pos[perm[k_best]]
-                i_best = linear_idx // m
-                j_best = linear_idx - i_best * m
+
+            i_best = linear_idx // m
+            j_best = linear_idx - i_best * m
 
             if i_best < 2 or j_best < 2:
                 return paths
