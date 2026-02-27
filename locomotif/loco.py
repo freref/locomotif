@@ -115,7 +115,24 @@ class LoCo:
 # Calculate the similarity threshold tau as the rho-quantile of the similarity matrix.
 def estimate_tau_from_sm(sm, rho, only_triu=False):
     if only_triu:
-        tau = np.quantile(sm[np.triu_indices(len(sm))], rho, axis=None)
+        n = sm.shape[0]
+        upper_count = n * (n + 1) // 2
+        lower_count = sm.size - upper_count
+        h = (upper_count - 1) * rho
+        k_lo = int(np.floor(h))
+        k_hi = int(np.ceil(h))
+        flat = sm.reshape(-1).copy()
+
+        idx_lo = lower_count + k_lo
+        idx_hi = lower_count + k_hi
+
+        if idx_lo == idx_hi:
+            flat.partition(idx_lo)
+            tau = flat[idx_lo]
+        else:
+            flat.partition((idx_lo, idx_hi))
+            weight = h - k_lo
+            tau = (1.0 - weight) * flat[idx_lo] + weight * flat[idx_hi]
     else:
         tau = np.quantile(sm, rho, axis=None)
     return tau

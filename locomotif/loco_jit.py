@@ -8,7 +8,7 @@ from numba.types import List, Array
 from numba import prange
 from numba.typed import List as TypedList
 
-@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
+@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32), parallel=True)
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     n, m = len(ts1), len(ts2)
 
@@ -396,6 +396,59 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
+@njit(cache=True)
+def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
+    for k in range(len(path) - 1):
+        ic = path[k, 0]
+        jc = path[k, 1]
+        it = path[k + 1, 0]
+        jt = path[k + 1, 1]
+
+        di = it - ic
+        dj = jt - jc
+
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+
+        for ii in range(i1, i2):
+            mask_flat[ii * m + jc] = True
+        row_base = ic * m
+        for jj in range(j1, j2):
+            mask_flat[row_base + jj] = True
+
+        if di == 2 and dj == 1:
+            ii = ic + 1
+            if i2 + 1 < n:
+                mask_flat[ii * m + jc] = True
+            row_base = ii * m
+            for jj in range(j1, j2):
+                mask_flat[row_base + jj] = True
+        elif di == 1 and dj == 2:
+            jjc = jc + 1
+            if j2 + 1 < m:
+                mask_flat[ic * m + jjc] = True
+            for ii in range(i1, i2):
+                mask_flat[ii * m + jjc] = True
+        else:
+            if not (di == 1 and dj == 1):
+                raise Exception("Path does not comply to the allowed step sizes")
+
+    ic = path[-1, 0]
+    jc = path[-1, 1]
+    i1 = max(0, ic - vwidth)
+    i2 = min(n, ic + vwidth + 1)
+    j1 = max(0, jc - vwidth)
+    j2 = min(m, jc + vwidth + 1)
+
+    for ii in range(i1, i2):
+        mask_flat[ii * m + jc] = True
+    row_base = ic * m
+    for jj in range(j1, j2):
+        mask_flat[row_base + jj] = True
+
+
 @njit(cache=True, parallel=True)
 def _collect_candidates_no_sources(csm, mask, src_id, l_min):
     n, m = csm.shape
@@ -482,7 +535,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             else:
                 _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
 
-        mask = mask_vicinity(path, mask, vwidth)
+        _mask_vicinity_flat(path, mask_flat, n, m, vwidth)
         paths.append(path)
 
     return paths
