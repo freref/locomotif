@@ -168,6 +168,44 @@ def _trace_path_len_and_start(mask, bp_dir, i, j):
 
 
 @njit(cache=True)
+def _trace_path_len_and_start_flat(mask_flat, bp_flat, m, i, j):
+    length = 0
+    start_i = i
+    start_j = j
+    lin = i * m + j
+
+    while i >= 2 and j >= 2:
+        length += 1
+        start_i = i
+        start_j = j
+
+        direction = bp_flat[lin]
+        if direction == 0:
+            pi = i - 1
+            pj = j - 1
+            plin = lin - m - 1
+        elif direction == 1:
+            pi = i - 2
+            pj = j - 1
+            plin = lin - 2 * m - 1
+        elif direction == 2:
+            pi = i - 1
+            pj = j - 2
+            plin = lin - m - 2
+        else:
+            break
+
+        if mask_flat[plin]:
+            break
+
+        i = pi
+        j = pj
+        lin = plin
+
+    return length, start_i, start_j
+
+
+@njit(cache=True)
 def _materialize_path_from_backpointers(mask, bp_dir, i, j, length):
     path = np.empty((length, 2), dtype=np.int32)
     k = length - 1
@@ -189,6 +227,41 @@ def _materialize_path_from_backpointers(mask, bp_dir, i, j, length):
         if mask[pi, pj]:
             break
         i, j = pi, pj
+
+    return path
+
+
+@njit(cache=True)
+def _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i, j, length):
+    path = np.empty((length, 2), dtype=np.int32)
+    k = length - 1
+    lin = i * m + j
+    while i >= 2 and j >= 2 and k >= 0:
+        path[k, 0] = i
+        path[k, 1] = j
+        k -= 1
+
+        direction = bp_flat[lin]
+        if direction == 0:
+            pi = i - 1
+            pj = j - 1
+            plin = lin - m - 1
+        elif direction == 1:
+            pi = i - 2
+            pj = j - 1
+            plin = lin - 2 * m - 1
+        elif direction == 2:
+            pi = i - 1
+            pj = j - 2
+            plin = lin - m - 2
+        else:
+            break
+
+        if mask_flat[plin]:
+            break
+        i = pi
+        j = pj
+        lin = plin
 
     return path
 
@@ -220,12 +293,43 @@ def _mask_backpointer_path_zero(mask, bp_dir, i, j):
 
 
 @njit(cache=True)
-def _radix_argsort_u32(keys):
+def _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i, j):
+    lin = i * m + j
+    while i >= 2 and j >= 2:
+        mask_flat[lin] = True
+
+        direction = bp_flat[lin]
+        if direction == 0:
+            pi = i - 1
+            pj = j - 1
+            plin = lin - m - 1
+        elif direction == 1:
+            pi = i - 2
+            pj = j - 1
+            plin = lin - 2 * m - 1
+        elif direction == 2:
+            pi = i - 1
+            pj = j - 2
+            plin = lin - m - 2
+        else:
+            break
+
+        if mask_flat[plin]:
+            break
+
+        if direction == 1 or direction == 2:
+            mask_flat[lin - m - 1] = True
+
+        i = pi
+        j = pj
+        lin = plin
+
+
+@njit(cache=True)
+def _radix_sort_u32_with_payload(keys, payload):
     n = len(keys)
-    idx = np.empty(n, dtype=np.int32)
-    tmp = np.empty(n, dtype=np.int32)
-    for i in range(n):
-        idx[i] = i
+    tmp_keys = np.empty(n, dtype=np.uint32)
+    tmp_payload = np.empty(n, dtype=np.int32)
 
     counts = np.empty(65536, dtype=np.int32)
     offsets = np.empty(65536, dtype=np.int32)
@@ -234,7 +338,7 @@ def _radix_argsort_u32(keys):
     for shift in (0, 16):
         counts[:] = 0
         for i in range(n):
-            b = np.int32((keys[idx[i]] >> np.uint32(shift)) & mask)
+            b = np.int32((keys[i] >> np.uint32(shift)) & mask)
             counts[b] += 1
 
         total = 0
@@ -243,15 +347,17 @@ def _radix_argsort_u32(keys):
             total += counts[b]
 
         for i in range(n):
-            ii = idx[i]
-            b = np.int32((keys[ii] >> np.uint32(shift)) & mask)
+            key = keys[i]
+            b = np.int32((key >> np.uint32(shift)) & mask)
             p = offsets[b]
-            tmp[p] = ii
+            tmp_keys[p] = key
+            tmp_payload[p] = payload[i]
             offsets[b] = p + 1
 
-        idx, tmp = tmp, idx
+        keys, tmp_keys = tmp_keys, keys
+        payload, tmp_payload = tmp_payload, payload
 
-    return idx
+    return keys, payload
 
 
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
@@ -341,26 +447,27 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     mask = mask | (csm <= 0)
     n, m = csm.shape
     mask_flat = mask.reshape(n * m)
+    bp_flat = bp_dir.reshape(n * m)
     linear_pos, values = _collect_candidates_no_sources(csm, mask, src_id, l_min)
     candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
 
     paths = TypedList.empty_list(int32[:, :])
-    perm = _radix_argsort_u32(values.view(np.uint32))
-    k_best = len(perm) - 1
+    _, linear_pos = _radix_sort_u32_with_payload(values.view(np.uint32), linear_pos)
+    k_best = len(linear_pos) - 1
 
     while k_best >= 0:
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
 
         while not path_found:
-            linear_idx = linear_pos[perm[k_best]]
+            linear_idx = linear_pos[k_best]
             while mask_flat[linear_idx]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
-                linear_idx = linear_pos[perm[k_best]]
+                linear_idx = linear_pos[k_best]
 
             i_best = linear_idx // m
             j_best = linear_idx - i_best * m
@@ -368,12 +475,12 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             if i_best < 2 or j_best < 2:
                 return paths
 
-            path_len, start_i, start_j = _trace_path_len_and_start(mask, bp_dir, i_best, j_best)
+            path_len, start_i, start_j = _trace_path_len_and_start_flat(mask_flat, bp_flat, m, i_best, j_best)
             if (i_best - start_i + 1) >= l_min or (j_best - start_j + 1) >= l_min:
-                path = _materialize_path_from_backpointers(mask, bp_dir, i_best, j_best, path_len)
+                path = _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i_best, j_best, path_len)
                 path_found = True
             else:
-                mask = _mask_backpointer_path_zero(mask, bp_dir, i_best, j_best)
+                _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
 
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)
