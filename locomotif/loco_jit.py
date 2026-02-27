@@ -450,21 +450,14 @@ def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
 
 
 @njit(cache=True, parallel=True)
-def _collect_candidates_no_sources(csm, mask, src_id, l_min):
+def _collect_positive_candidates(csm, mask):
     n, m = csm.shape
     row_counts = np.zeros(n, dtype=np.int32)
 
     for i in prange(2, n):
         cnt = np.int32(0)
         for j in range(2, m):
-            if mask[i, j] or csm[i, j] <= 0.0:
-                continue
-            source = src_id[i, j]
-            if source < 0:
-                continue
-            si = source // m
-            sj = source - si * m
-            if (i - si + 1) >= l_min or (j - sj + 1) >= l_min:
+            if not mask[i, j] and csm[i, j] > 0.0:
                 cnt += 1
         row_counts[i] = cnt
 
@@ -479,14 +472,7 @@ def _collect_candidates_no_sources(csm, mask, src_id, l_min):
     for i in prange(2, n):
         cursor = row_offsets[i]
         for j in range(2, m):
-            if mask[i, j] or csm[i, j] <= 0.0:
-                continue
-            source = src_id[i, j]
-            if source < 0:
-                continue
-            si = source // m
-            sj = source - si * m
-            if (i - si + 1) >= l_min or (j - sj + 1) >= l_min:
+            if not mask[i, j] and csm[i, j] > 0.0:
                 linear_pos[cursor] = i * m + j
                 values[cursor] = csm[i, j]
                 cursor += 1
@@ -501,7 +487,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     n, m = csm.shape
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m)
-    linear_pos, values = _collect_candidates_no_sources(csm, mask, src_id, l_min)
+    linear_pos, values = _collect_positive_candidates(csm, mask)
     candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
