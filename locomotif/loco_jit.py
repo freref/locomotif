@@ -454,7 +454,7 @@ def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
 
 
 @njit(cache=True, parallel=True)
-def _collect_positive_candidates(csm, mask):
+def _collect_positive_candidates(csm, mask, bp_dir):
     n, m = csm.shape
     row_counts = np.zeros(n, dtype=np.int32)
 
@@ -462,7 +462,25 @@ def _collect_positive_candidates(csm, mask):
         cnt = np.int32(0)
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0:
-                cnt += 1
+                has_larger_successor = False
+                
+                # Check (i+1, j+1) direction 0
+                if i + 1 < n and j + 1 < m:
+                    if bp_dir[i + 1, j + 1] == 0 and csm[i + 1, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                
+                # Check (i+2, j+1) direction 1
+                if not has_larger_successor and i + 2 < n and j + 1 < m:
+                    if bp_dir[i + 2, j + 1] == 1 and csm[i + 2, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                        
+                # Check (i+1, j+2) direction 2
+                if not has_larger_successor and i + 1 < n and j + 2 < m:
+                    if bp_dir[i + 1, j + 2] == 2 and csm[i + 1, j + 2] >= csm[i, j]:
+                        has_larger_successor = True
+
+                if not has_larger_successor:
+                    cnt += 1
         row_counts[i] = cnt
 
     total = np.int64(0)
@@ -477,15 +495,30 @@ def _collect_positive_candidates(csm, mask):
         cursor = row_offsets[i]
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0:
-                linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
-                values[cursor] = csm[i, j]
-                cursor += 1
+                has_larger_successor = False
+                
+                if i + 1 < n and j + 1 < m:
+                    if bp_dir[i + 1, j + 1] == 0 and csm[i + 1, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                
+                if not has_larger_successor and i + 2 < n and j + 1 < m:
+                    if bp_dir[i + 2, j + 1] == 1 and csm[i + 2, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                        
+                if not has_larger_successor and i + 1 < n and j + 2 < m:
+                    if bp_dir[i + 1, j + 2] == 2 and csm[i + 1, j + 2] >= csm[i, j]:
+                        has_larger_successor = True
+
+                if not has_larger_successor:
+                    linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
+                    values[cursor] = csm[i, j]
+                    cursor += 1
 
     return linear_pos, values
 
 
 @njit(cache=True, parallel=True)
-def _collect_positive_candidates_pruned(csm, mask, dist, min_dist):
+def _collect_positive_candidates_pruned(csm, mask, bp_dir, dist, min_dist):
     n, m = csm.shape
     row_counts = np.zeros(n, dtype=np.int32)
 
@@ -493,7 +526,22 @@ def _collect_positive_candidates_pruned(csm, mask, dist, min_dist):
         cnt = np.int32(0)
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0 and dist[i, j] >= min_dist:
-                cnt += 1
+                has_larger_successor = False
+                
+                if i + 1 < n and j + 1 < m:
+                    if bp_dir[i + 1, j + 1] == 0 and csm[i + 1, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                
+                if not has_larger_successor and i + 2 < n and j + 1 < m:
+                    if bp_dir[i + 2, j + 1] == 1 and csm[i + 2, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                        
+                if not has_larger_successor and i + 1 < n and j + 2 < m:
+                    if bp_dir[i + 1, j + 2] == 2 and csm[i + 1, j + 2] >= csm[i, j]:
+                        has_larger_successor = True
+
+                if not has_larger_successor:
+                    cnt += 1
         row_counts[i] = cnt
 
     total = np.int64(0)
@@ -508,12 +556,64 @@ def _collect_positive_candidates_pruned(csm, mask, dist, min_dist):
         cursor = row_offsets[i]
         for j in range(2, m):
             if not mask[i, j] and csm[i, j] > 0.0 and dist[i, j] >= min_dist:
-                linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
-                values[cursor] = csm[i, j]
-                cursor += 1
+                has_larger_successor = False
+                
+                if i + 1 < n and j + 1 < m:
+                    if bp_dir[i + 1, j + 1] == 0 and csm[i + 1, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                
+                if not has_larger_successor and i + 2 < n and j + 1 < m:
+                    if bp_dir[i + 2, j + 1] == 1 and csm[i + 2, j + 1] >= csm[i, j]:
+                        has_larger_successor = True
+                        
+                if not has_larger_successor and i + 1 < n and j + 2 < m:
+                    if bp_dir[i + 1, j + 2] == 2 and csm[i + 1, j + 2] >= csm[i, j]:
+                        has_larger_successor = True
+
+                if not has_larger_successor:
+                    linear_pos[cursor] = np.int64(i) * np.int64(m) + np.int64(j)
+                    values[cursor] = csm[i, j]
+                    cursor += 1
 
     return linear_pos, values
 
+
+@njit(cache=True)
+def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
+    length = 0
+    lin = i * m + j
+    buf_idx = len(buf) - 1
+
+    while i >= 2 and j >= 2:
+        buf[buf_idx, 0] = i
+        buf[buf_idx, 1] = j
+        length += 1
+        buf_idx -= 1
+
+        direction = bp_flat[lin]
+        if direction == 0:
+            pi = i - 1
+            pj = j - 1
+            plin = lin - m - 1
+        elif direction == 1:
+            pi = i - 2
+            pj = j - 1
+            plin = lin - 2 * m - 1
+        elif direction == 2:
+            pi = i - 1
+            pj = j - 2
+            plin = lin - m - 2
+        else:
+            break
+
+        if mask_flat[plin]:
+            break
+
+        i = pi
+        j = pj
+        lin = plin
+
+    return length
 
 @njit(cache=True)
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None, dist=None):
@@ -523,9 +623,9 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m)
     if dist is None:
-        linear_pos, values = _collect_positive_candidates(csm, mask)
+        linear_pos, values = _collect_positive_candidates(csm, mask, bp_dir)
     else:
-        linear_pos, values = _collect_positive_candidates_pruned(csm, mask, dist, np.int32(l_min // 2))
+        linear_pos, values = _collect_positive_candidates_pruned(csm, mask, bp_dir, dist, np.int32(l_min // 2))
     candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
@@ -533,6 +633,8 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     paths = TypedList.empty_list(int32[:, :])
     _, linear_pos = _radix_sort_u32_with_payload(values.view(np.uint32), linear_pos)
     k_best = len(linear_pos) - 1
+
+    trace_buf = np.empty((n + m, 2), dtype=np.int32)
 
     while k_best >= 0:
         path = np.empty((0, 0), dtype=np.int32)
@@ -560,9 +662,13 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
                     _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
                     continue
 
-            path_len, start_i, start_j = _trace_path_len_and_start_flat(mask_flat, bp_flat, m, i_best, j_best)
+            path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
+            buf_start = len(trace_buf) - path_len
+            start_i = trace_buf[buf_start, 0]
+            start_j = trace_buf[buf_start, 1]
+
             if (i_best - start_i + 1) >= l_min or (j_best - start_j + 1) >= l_min:
-                path = _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i_best, j_best, path_len)
+                path = trace_buf[buf_start : len(trace_buf)].copy()
                 path_found = True
             else:
                 _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)

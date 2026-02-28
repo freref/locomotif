@@ -730,6 +730,13 @@ def _find_best_candidate_graph(
 
     Pe = np.zeros(max_size, dtype=np.bool_)
     es_checked = np.zeros(max_size, dtype=np.int32)
+    
+    path_kb = np.empty(max_size, dtype=np.int32)
+    path_b = np.empty(max_size, dtype=np.int32)
+    path_cum_b = np.empty(max_size, dtype=np.float32)
+    path_col_base = np.empty(max_size, dtype=np.int64)
+    path_node_base = np.empty(max_size, dtype=np.int64)
+    path_cum_base = np.empty(max_size, dtype=np.int64)
 
     best_fitness = 0.0
     best_candidate = (0, 0)
@@ -775,86 +782,95 @@ def _find_best_candidate_graph(
         if col_prefix[b_repr + l_min - 1] - col_prefix[b_repr] > 0:
             continue
 
-        Pe[:nb_paths] = True
-        es_checked[:nb_paths] = active_keys[:nb_paths]
-        nb_remaining_paths = nb_paths
-
-        for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
-            if col_mask[e_repr - 1]:
+        E_max = min(c + 1, b_repr + l_max + 1) - (b_repr + l_min)
+        E = 0
+        for e_idx in range(E_max):
+            if col_mask[b_repr + l_min + e_idx - 1]:
                 break
-            if not end_mask[e_repr - 1]:
-                continue
+            E += 1
+            
+        if E == 0:
+            continue
 
-            score = 0.0
-            total_length = 0.0
-            total_path_length = 0.0
-            total_overlap = 0.0
-            l_prev = 0
-            e_prev = 0
-            too_much_overlap = False
+        vec_score = np.zeros(E, dtype=np.float32)
+        vec_len = np.zeros(E, dtype=np.int32)
+        vec_path_len = np.zeros(E, dtype=np.int32)
+        vec_overlap = np.zeros(E, dtype=np.int32)
+        vec_valid = np.ones(E, dtype=np.bool_)
+        
+        for e_idx in range(E):
+            if not end_mask[b_repr + l_min + e_idx - 1]:
+                vec_valid[e_idx] = False
 
-            for active_idx in range(nb_paths):
-                if nb_remaining_paths < 2:
+        e_prev_array = np.zeros(E, dtype=np.int32)
+        l_prev_array = np.zeros(E, dtype=np.int32)
+        paths_added = np.zeros(E, dtype=np.int32)
+
+        for active_idx in range(nb_paths):
+            path_idx = active_paths[active_idx]
+            col_base = col_offsets[path_idx]
+            node_base = path_starts[path_idx]
+            cum_base = cum_offsets[path_idx]
+            
+            kb = index_j[col_base + np.int64(b_repr - path_j1[path_idx])]
+            b = node_rows[node_base + np.int64(kb)]
+            cum_b = cumulative[cum_base + np.int64(kb)]
+            path_end = path_jl[path_idx]
+            
+            es_checked = b
+            
+            for e_idx in range(E):
+                if not vec_valid[e_idx]:
+                    continue
+                    
+                e_repr = b_repr + l_min + e_idx
+                if path_end < e_repr:
                     break
-                if not Pe[active_idx]:
-                    continue
-
-                path_idx = active_paths[active_idx]
-                if path_jl[path_idx] < e_repr:
-                    Pe[active_idx] = False
-                    nb_remaining_paths -= 1
-                    continue
-
-                col_base = col_offsets[path_idx]
-                node_base = path_starts[path_idx]
-                cum_base = cum_offsets[path_idx]
-                kb = index_j[col_base + np.int64(b_repr - path_j1[path_idx])]
+                    
                 ke = index_j[col_base + np.int64(e_repr - 1 - path_j1[path_idx])]
-                b = node_rows[node_base + np.int64(kb)]
                 e = node_rows[node_base + np.int64(ke)] + 1
-
-                if row_prefix[e] - row_prefix[es_checked[active_idx]] > 0:
-                    Pe[active_idx] = False
-                    nb_remaining_paths -= 1
-                    continue
-                es_checked[active_idx] = e
-
+                
+                if row_prefix[e] - row_prefix[es_checked] > 0:
+                    break
+                    
+                es_checked = e
                 l = e - b
-                if active_idx > 0:
-                    overlap = max(0, e_prev - b)
-                    if nu * min(l, l_prev) < overlap:
-                        too_much_overlap = True
-                        break
-                    total_overlap += overlap
+                
+                if paths_added[e_idx] > 0:
+                    overlap = max(0, e_prev_array[e_idx] - b)
+                    if nu * min(l, l_prev_array[e_idx]) < overlap:
+                        vec_valid[e_idx] = False
+                        continue
+                    vec_overlap[e_idx] += overlap
+                    
+                vec_len[e_idx] += l
+                vec_path_len[e_idx] += (ke - kb + 1)
+                vec_score[e_idx] += cumulative[cum_base + np.int64(ke + 1)] - cum_b
+                
+                e_prev_array[e_idx] = e
+                l_prev_array[e_idx] = l
+                paths_added[e_idx] += 1
 
-                total_length += l
-                total_path_length += ke - kb + 1
-                score += cumulative[cum_base + np.int64(ke + 1)] - cumulative[cum_base + np.int64(kb)]
-
-                l_prev = l
-                e_prev = e
-
-            if nb_remaining_paths < 2:
-                break
-            if too_much_overlap:
+        for e_idx in range(E):
+            if not vec_valid[e_idx] or paths_added[e_idx] < 2:
                 continue
-
+                
+            e_repr = b_repr + l_min + e_idx
             l_repr = e_repr - b_repr
-            n_score = (score - l_repr) / total_path_length
-            n_coverage = (total_length - total_overlap - l_repr) / float(n)
-
+            
+            n_score = (vec_score[e_idx] - l_repr) / vec_path_len[e_idx]
+            n_coverage = (vec_len[e_idx] - vec_overlap[e_idx] - l_repr) / float(n)
+            
             fit = 0.0
             if n_coverage != 0 or n_score != 0:
                 fit = 2 * (n_coverage * n_score) / (n_coverage + n_score)
-            if fit == 0.0:
-                continue
-
-            if fit > best_fitness:
-                best_candidate = (b_repr, e_repr)
-                best_fitness = fit
-
-            if keep_fitnesses:
-                fitnesses.append((b_repr, e_repr, fit, n_coverage, n_score))
+                
+            if fit > 0.0:
+                if fit > best_fitness:
+                    best_candidate = (b_repr, e_repr)
+                    best_fitness = fit
+                if keep_fitnesses:
+                    fitnesses.append((b_repr, e_repr, fit, n_coverage, n_score))
 
     fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
     return best_candidate, best_fitness, fitnesses
