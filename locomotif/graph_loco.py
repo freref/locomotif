@@ -13,12 +13,10 @@ def find_best_paths_graph_for_instance(lcm, vwidth=None):
     if loco_obj._csm is None:
         loco_obj.calculate_cumulative_similarity_matrix()
 
-    mask = np.full(loco_obj._csm.shape, loco_obj._symmetric)
     if loco_obj._symmetric:
-        for row_idx in range(mask.shape[0]):
-            col_start = row_idx + vwidth + 1
-            if col_start < mask.shape[1]:
-                mask[row_idx, col_start:] = False
+        mask = np.tril(np.ones(loco_obj._csm.shape, dtype=bool), k=vwidth)
+    else:
+        mask = np.zeros(loco_obj._csm.shape, dtype=bool)
 
     raw_paths = loco_jit.find_best_paths(
         loco_obj._csm,

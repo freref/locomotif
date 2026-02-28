@@ -819,6 +819,8 @@ def _find_best_candidate_graph(
             
             es_checked = b
             
+            base_idx_e = col_base + np.int64(b_repr + l_min - 1 - path_j1[path_idx])
+            
             for e_idx in range(E):
                 if not vec_valid[e_idx]:
                     continue
@@ -827,7 +829,7 @@ def _find_best_candidate_graph(
                 if path_end < e_repr:
                     break
                     
-                ke = index_j[col_base + np.int64(e_repr - 1 - path_j1[path_idx])]
+                ke = index_j[base_idx_e + e_idx]
                 e = node_rows[node_base + np.int64(ke)] + 1
                 
                 if row_prefix[e] - row_prefix[es_checked] > 0:

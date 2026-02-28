@@ -74,12 +74,10 @@ class LoCo:
             self.calculate_cumulative_similarity_matrix()
 
         # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
-        mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
-            for row_idx in range(mask.shape[0]):
-                col_start = row_idx + vwidth + 1
-                if col_start < mask.shape[1]:
-                    mask[row_idx, col_start:] = False
+            mask = np.tril(np.ones(self._csm.shape, dtype=bool), k=vwidth)
+        else:
+            mask = np.zeros(self._csm.shape, dtype=bool)
 
         paths = find_best_paths(
             self._csm,

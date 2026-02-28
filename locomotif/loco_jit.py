@@ -184,26 +184,22 @@ def _trace_path_len_and_start_flat(mask_flat, bp_flat, m, i, j):
 
         direction = bp_flat[lin]
         if direction == 0:
-            pi = i - 1
-            pj = j - 1
-            plin = lin - m - 1
+            i -= 1
+            j -= 1
+            lin -= m + 1
         elif direction == 1:
-            pi = i - 2
-            pj = j - 1
-            plin = lin - 2 * m - 1
+            i -= 2
+            j -= 1
+            lin -= 2 * m + 1
         elif direction == 2:
-            pi = i - 1
-            pj = j - 2
-            plin = lin - m - 2
+            i -= 1
+            j -= 2
+            lin -= m + 2
         else:
             break
 
-        if mask_flat[plin]:
+        if mask_flat[lin]:
             break
-
-        i = pi
-        j = pj
-        lin = plin
 
     return length, start_i, start_j
 
@@ -246,25 +242,22 @@ def _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i, j, length
 
         direction = bp_flat[lin]
         if direction == 0:
-            pi = i - 1
-            pj = j - 1
-            plin = lin - m - 1
+            i -= 1
+            j -= 1
+            lin -= m + 1
         elif direction == 1:
-            pi = i - 2
-            pj = j - 1
-            plin = lin - 2 * m - 1
+            i -= 2
+            j -= 1
+            lin -= 2 * m + 1
         elif direction == 2:
-            pi = i - 1
-            pj = j - 2
-            plin = lin - m - 2
+            i -= 1
+            j -= 2
+            lin -= m + 2
         else:
             break
 
-        if mask_flat[plin]:
+        if mask_flat[lin]:
             break
-        i = pi
-        j = pj
-        lin = plin
 
     return path
 
@@ -357,7 +350,8 @@ def mask_vicinity(path, mask, vwidth=10):
 
 
 @njit(cache=True)
-def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
+def _mask_vicinity(path, mask, vwidth):
+    n, m = mask.shape
     for k in range(len(path) - 1):
         ic = path[k, 0]
         jc = path[k, 1]
@@ -372,28 +366,19 @@ def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
         j1 = max(0, jc - vwidth)
         j2 = min(m, jc + vwidth + 1)
 
-        for ii in range(i1, i2):
-            mask_flat[ii * m + jc] = True
-        row_base = ic * m
-        for jj in range(j1, j2):
-            mask_flat[row_base + jj] = True
+        mask[i1:i2, jc] = True
+        mask[ic, j1:j2] = True
 
         if di == 2 and dj == 1:
             ii = ic + 1
             if i2 + 1 < n:
-                mask_flat[ii * m + jc] = True
-            row_base = ii * m
-            for jj in range(j1, j2):
-                mask_flat[row_base + jj] = True
+                mask[ii, jc] = True
+            mask[ii, j1:j2] = True
         elif di == 1 and dj == 2:
             jjc = jc + 1
             if j2 + 1 < m:
-                mask_flat[ic * m + jjc] = True
-            for ii in range(i1, i2):
-                mask_flat[ii * m + jjc] = True
-        else:
-            if not (di == 1 and dj == 1):
-                raise Exception("Path does not comply to the allowed step sizes")
+                mask[ic, jjc] = True
+            mask[i1:i2, jjc] = True
 
     ic = path[-1, 0]
     jc = path[-1, 1]
@@ -402,11 +387,8 @@ def _mask_vicinity_flat(path, mask_flat, n, m, vwidth):
     j1 = max(0, jc - vwidth)
     j2 = min(m, jc + vwidth + 1)
 
-    for ii in range(i1, i2):
-        mask_flat[ii * m + jc] = True
-    row_base = ic * m
-    for jj in range(j1, j2):
-        mask_flat[row_base + jj] = True
+    mask[i1:i2, jc] = True
+    mask[ic, j1:j2] = True
 
 
 @njit(cache=True, parallel=True)
@@ -548,33 +530,37 @@ def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
 
         direction = bp_flat[lin]
         if direction == 0:
-            pi = i - 1
-            pj = j - 1
-            plin = lin - m - 1
+            i -= 1
+            j -= 1
+            lin -= m + 1
         elif direction == 1:
-            pi = i - 2
-            pj = j - 1
-            plin = lin - 2 * m - 1
+            i -= 2
+            j -= 1
+            lin -= 2 * m + 1
         elif direction == 2:
-            pi = i - 1
-            pj = j - 2
-            plin = lin - m - 2
+            i -= 1
+            j -= 2
+            lin -= m + 2
         else:
             break
 
-        if mask_flat[plin]:
+        if mask_flat[lin]:
             break
 
-        i = pi
-        j = pj
-        lin = plin
-
     return length
+
+@njit(cache=True, parallel=True)
+def _apply_csm_mask(csm, mask):
+    n, m = csm.shape
+    for i in prange(n):
+        for j in range(m):
+            if csm[i, j] <= 0:
+                mask[i, j] = True
 
 @njit(cache=True)
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     # Mask all zeros
-    mask = mask | (csm <= 0)
+    _apply_csm_mask(csm, mask)
     n, m = csm.shape
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m)
@@ -620,7 +606,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             else:
                 _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
 
-        _mask_vicinity_flat(path, mask_flat, n, m, vwidth)
+        _mask_vicinity(path, mask, vwidth)
         paths.append(path)
 
     return paths
