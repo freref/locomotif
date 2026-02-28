@@ -8,6 +8,27 @@ from numba.types import List, Array
 from numba import prange
 from numba.typed import List as TypedList
 
+@njit(cache=True, parallel=True)
+def _extract_triu_elements(sm):
+    n = sm.shape[0]
+    total = n * (n + 1) // 2
+    out = np.empty(total, dtype=np.float32)
+    
+    # Calculate row start offsets mathematically
+    row_starts = np.empty(n, dtype=np.int64)
+    for i in prange(n):
+        # elements before row i: n + (n-1) + ... + (n - i + 1)
+        # = i * n - i * (i - 1) // 2
+        row_starts[i] = i * n - (i * (i - 1)) // 2
+
+    for i in prange(n):
+        idx = row_starts[i]
+        for j in range(i, n):
+            out[idx] = sm[i, j]
+            idx += 1
+            
+    return out
+
 @njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32), parallel=True)
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     n, m = len(ts1), len(ts2)
@@ -41,8 +62,6 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
-    src_id = np.full((n + 2, m + 2), np.int64(-1), dtype=np.int64)
-    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -65,20 +84,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
                 csm[ii, jj] = val
                 bp_dir[ii, jj] = direction
 
-                if direction == 0:
-                    pi, pj = ii - 1, jj - 1
-                elif direction == 1:
-                    pi, pj = ii - 2, jj - 1
-                else:
-                    pi, pj = ii - 1, jj - 2
-
-                if csm[pi, pj] > 0.0:
-                    src_id[ii, jj] = src_id[pi, pj]
-                    dist[ii, jj] = dist[pi, pj] + 1
-                else:
-                    src_id[ii, jj] = np.int64(ii) * np.int64(m + 2) + np.int64(jj)
-
-    return csm, bp_dir, src_id, dist
+    return csm, bp_dir
 
 
 @njit(cache=True)
@@ -87,8 +93,6 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
-    src_id = np.full((n + 2, m + 2), np.int64(-1), dtype=np.int64)
-    dist = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -110,13 +114,8 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
             if val > 0.0:
                 csm[ii, jj] = val
                 bp_dir[ii, jj] = np.int8(0)
-                if pred_score > 0.0:
-                    src_id[ii, jj] = src_id[ii - 1, jj - 1]
-                    dist[ii, jj] = dist[ii - 1, jj - 1] + 1
-                else:
-                    src_id[ii, jj] = np.int64(ii) * np.int64(m + 2) + np.int64(jj)
 
-    return csm, bp_dir, src_id, dist
+    return csm, bp_dir
 
 
 @njit(Array(int32, 2, 'C')(boolean[:, :], int8[:, :], int32, int32), cache=True)
@@ -271,63 +270,20 @@ def _materialize_path_from_backpointers_flat(mask_flat, bp_flat, m, i, j, length
 
 
 @njit(cache=True)
-def _mask_backpointer_path_zero(mask, bp_dir, i, j):
-    while i >= 2 and j >= 2:
-        mask[i, j] = True
-
-        direction = bp_dir[i, j]
-        if direction == 0:
-            pi, pj = i - 1, j - 1
-        elif direction == 1:
-            pi, pj = i - 2, j - 1
-        elif direction == 2:
-            pi, pj = i - 1, j - 2
-        else:
-            break
-
-        if mask[pi, pj]:
-            break
-
-        if direction == 1 or direction == 2:
-            mask[i - 1, j - 1] = True
-
-        i, j = pi, pj
-
-    return mask
-
-
-@njit(cache=True)
-def _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i, j):
-    lin = i * m + j
-    while i >= 2 and j >= 2:
+def _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start):
+    for k in range(buf_start, len(trace_buf)):
+        i = trace_buf[k, 0]
+        j = trace_buf[k, 1]
+        lin = i * m + j
         mask_flat[lin] = True
-
-        direction = bp_flat[lin]
-        if direction == 0:
-            pi = i - 1
-            pj = j - 1
-            plin = lin - m - 1
-        elif direction == 1:
-            pi = i - 2
-            pj = j - 1
-            plin = lin - 2 * m - 1
-        elif direction == 2:
-            pi = i - 1
-            pj = j - 2
-            plin = lin - m - 2
-        else:
-            break
-
-        if mask_flat[plin]:
-            break
-
-        if direction == 1 or direction == 2:
-            mask_flat[lin - m - 1] = True
-
-        i = pi
-        j = pj
-        lin = plin
-
+        
+        if k > buf_start:
+            pi = trace_buf[k-1, 0]
+            pj = trace_buf[k-1, 1]
+            # Direction 1: i - pi == 2, j - pj == 1 -> intermediate is i-1, j-1
+            # Direction 2: i - pi == 1, j - pj == 2 -> intermediate is i-1, j-1
+            if (i - pi == 2 and j - pj == 1) or (i - pi == 1 and j - pj == 2):
+                mask_flat[(i - 1) * m + (j - 1)] = True
 
 @njit(cache=True)
 def _radix_sort_u32_with_payload(keys, payload):
@@ -616,16 +572,15 @@ def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
     return length
 
 @njit(cache=True)
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, src_id=None, dist=None):
+def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     # Mask all zeros
     mask = mask | (csm <= 0)
     n, m = csm.shape
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m)
-    if dist is None:
-        linear_pos, values = _collect_positive_candidates(csm, mask, bp_dir)
-    else:
-        linear_pos, values = _collect_positive_candidates_pruned(csm, mask, bp_dir, dist, np.int32(l_min // 2))
+    
+    linear_pos, values = _collect_positive_candidates(csm, mask, bp_dir)
+    
     candidate_count = len(linear_pos)
     if candidate_count == 0:
         return TypedList.empty_list(int32[:, :])
@@ -654,14 +609,6 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             if i_best < 2 or j_best < 2:
                 return paths
 
-            src = src_id[i_best, j_best]
-            if src >= 0:
-                start_i = src // np.int64(m)
-                start_j = src - start_i * np.int64(m)
-                if (i_best - start_i + 1) < l_min and (j_best - start_j + 1) < l_min:
-                    _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
-                    continue
-
             path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
             buf_start = len(trace_buf) - path_len
             start_i = trace_buf[buf_start, 0]
@@ -671,7 +618,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
                 path = trace_buf[buf_start : len(trace_buf)].copy()
                 path_found = True
             else:
-                _mask_backpointer_path_zero_flat(mask_flat, bp_flat, m, i_best, j_best)
+                _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
 
         _mask_vicinity_flat(path, mask_flat, n, m, vwidth)
         paths.append(path)

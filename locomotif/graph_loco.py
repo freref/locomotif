@@ -28,8 +28,6 @@ def find_best_paths_graph_for_instance(lcm, vwidth=None):
         np.int32(vwidth),
         loco_obj.warping,
         loco_obj._bp_dir,
-        loco_obj._src_id,
-        loco_obj._dist,
     )
 
     lcm._path_data = _build_compact_path_graph(raw_paths, lcm.self_similarity_matrix, loco_obj._symmetric)
