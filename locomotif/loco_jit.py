@@ -209,35 +209,14 @@ def _collect_positive_candidates(csm, mask, bp_dir):
     block_size = 16
     ni, nj = (n + block_size - 1) // block_size, (m + block_size - 1) // block_size
     
-    # 1. Coarse scan to find active blocks
-    active_blocks = np.zeros((ni, nj), dtype=np.bool_)
+    # 1. Parallel scan to find active blocks and count candidates
+    block_counts = np.zeros((ni, nj), dtype=np.int32)
     for bi in prange(ni):
-        i_s = max(2, bi * block_size)
-        i_e = min(n, i_s + block_size)
+        i_s = max(2, bi * block_size); i_e = min(n, (bi + 1) * block_size)
         for bj in range(nj):
-            j_s = max(2, bj * block_size)
-            j_e = min(m, j_s + block_size)
-            
-            found = False
+            j_s = max(2, bj * block_size); j_e = min(m, (bj + 1) * block_size)
+            cnt = 0
             for i in range(i_s, i_e):
-                for j in range(j_s, j_e):
-                    if not mask[i, j] and csm[i, j] > 0.0:
-                        found = True; break
-                if found: break
-            active_blocks[bi, bj] = found
-
-    # 2. Fine scan in active blocks
-    row_counts = np.zeros(n, dtype=np.int32)
-    for bi in prange(ni):
-        i_s = max(2, bi * block_size)
-        i_e = min(n, i_s + block_size)
-        for bj in range(nj):
-            if not active_blocks[bi, bj]: continue
-            j_s = max(2, bj * block_size)
-            j_e = min(m, j_s + block_size)
-            
-            for i in range(i_s, i_e):
-                cnt = 0
                 for j in range(j_s, j_e):
                     if not mask[i, j] and csm[i, j] > 0.0:
                         ok = True
@@ -245,52 +224,35 @@ def _collect_positive_candidates(csm, mask, bp_dir):
                         if ok and i+2 < n and j+1 < m and bp_dir[i+2, j+1] == 1 and csm[i+2, j+1] >= csm[i, j]: ok = False
                         if ok and i+1 < n and j+2 < m and bp_dir[i+1, j+2] == 2 and csm[i+1, j+2] >= csm[i, j]: ok = False
                         if ok: cnt += 1
-                # Numba doesn't like atomic add on array element in nested loop easily, 
-                # but we can use a local variable and then add to row_counts[i]
-                # Wait, row_counts[i] is indexed by i, which is unique to each bi thread if i_s/i_e don't overlap.
-                # Since bi is in prange, i is unique.
-                if cnt > 0:
-                    # row_counts[i] += cnt # This is safe because i is unique to this bi
-                    # Wait, multiple bj could cover the same row i!
-                    # So we need to accumulate bj results for each row i.
-                    pass
-    
-    # Let's rewrite the fine scan to be more robust.
-    # We'll just do one pass over rows, and for each row check only active bj.
-    for i in prange(2, n):
-        bi = i // block_size
-        cnt = 0
-        for bj in range(nj):
-            if active_blocks[bi, bj]:
-                j_s = max(2, bj * block_size)
-                j_e = min(m, j_s + block_size)
-                for j in range(j_s, j_e):
-                    if not mask[i, j] and csm[i, j] > 0.0:
-                        ok = True
-                        if i+1 < n and j+1 < m and bp_dir[i+1, j+1] == 0 and csm[i+1, j+1] >= csm[i, j]: ok = False
-                        if ok and i+2 < n and j+1 < m and bp_dir[i+2, j+1] == 1 and csm[i+2, j+1] >= csm[i, j]: ok = False
-                        if ok and i+1 < n and j+2 < m and bp_dir[i+1, j+2] == 2 and csm[i+1, j+2] >= csm[i, j]: ok = False
-                        if ok: cnt += 1
-        row_counts[i] = cnt
+            block_counts[bi, bj] = cnt
 
-    total = np.sum(row_counts)
-    row_offsets = np.zeros(n, dtype=np.int64); curr = np.int64(0)
-    for i in range(n): row_offsets[i] = curr; curr += row_counts[i]
+    total = np.sum(block_counts)
     lp = np.empty(total, dtype=np.int64); vs = np.empty(total, dtype=np.float32)
-    for i in prange(2, n):
-        bi = i // block_size
-        w = row_offsets[i]
+    
+    # 2. Prefix sum for block offsets
+    flat_counts = block_counts.reshape(ni * nj)
+    offsets = np.zeros(ni * nj, dtype=np.int64)
+    curr = np.int64(0)
+    for k in range(ni * nj):
+        offsets[k] = curr
+        curr += flat_counts[k]
+        
+    # 3. Parallel collection
+    for bi in prange(ni):
+        i_s = max(2, bi * block_size); i_e = min(n, (bi + 1) * block_size)
         for bj in range(nj):
-            if active_blocks[bi, bj]:
-                j_s = max(2, bj * block_size)
-                j_e = min(m, j_s + block_size)
+            if block_counts[bi, bj] == 0: continue
+            w = offsets[bi * nj + bj]
+            j_s = max(2, bj * block_size); j_e = min(m, (bj + 1) * block_size)
+            for i in range(i_s, i_e):
                 for j in range(j_s, j_e):
                     if not mask[i, j] and csm[i, j] > 0.0:
                         ok = True
                         if i+1 < n and j+1 < m and bp_dir[i+1, j+1] == 0 and csm[i+1, j+1] >= csm[i, j]: ok = False
                         if ok and i+2 < n and j+1 < m and bp_dir[i+2, j+1] == 1 and csm[i+2, j+1] >= csm[i, j]: ok = False
                         if ok and i+1 < n and j+2 < m and bp_dir[i+1, j+2] == 2 and csm[i+1, j+2] >= csm[i, j]: ok = False
-                        if ok: lp[w] = np.int64(i) * np.int64(m) + np.int64(j); vs[w] = csm[i, j]; w += 1
+                        if ok:
+                            lp[w] = np.int64(i) * np.int64(m) + np.int64(j); vs[w] = csm[i, j]; w += 1
     return lp, vs
 
 @njit(cache=True)
