@@ -779,6 +779,15 @@ def _find_best_candidate_graph(
         if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
             continue
 
+        # COARSE PRUNING:
+        # Fitness is harmonic mean: fit = 2*cov*score / (cov+score) <= 2*cov
+        # n_coverage = (sum_lengths - overlap - l_repr) / n
+        # sum_lengths <= nb_paths * l_max. overlap >= 0. l_repr >= l_min.
+        # So n_coverage <= (nb_paths * l_max - l_min) / n
+        max_possible_cov = (nb_paths * l_max - l_min) / float(n)
+        if 2.0 * max_possible_cov < best_fitness:
+            continue
+
         if col_prefix[b_repr + l_min - 1] - col_prefix[b_repr] > 0:
             continue
 
