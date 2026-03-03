@@ -4,7 +4,7 @@ from . import loco_jit
 
 def find_best_paths_graph_for_instance(lcm, vwidth=None):
     if vwidth is None:
-        vwidth = np.maximum(10, lcm.l_min // 2)
+        vwidth = lcm.l_min // 2
     
     # 1. Similarity Matrix (Exact same logic as main/loco.py)
     sm = lcm._loco.calculate_similarity_matrix()

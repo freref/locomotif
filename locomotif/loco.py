@@ -34,9 +34,9 @@ def estimate_tau_from_sm(sm, rho, only_triu=False):
 
 class LoCo:
     def __init__(self, ts, gamma=None, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True, ts2=None, equal_weight_dims=False):
-        self.ts = ensure_multivariate(ts)
+        self.ts = ensure_multivariate(np.array(ts, dtype=np.float32))
         self._symmetric = (ts2 is None)
-        self.ts2 = self.ts if self._symmetric else ensure_multivariate(ts2)
+        self.ts2 = self.ts if self._symmetric else ensure_multivariate(np.array(ts2, dtype=np.float32))
         self.gamma = handle_gamma(self.ts, gamma, self._symmetric, equal_weight_dims)
         self.tau = tau; self.delta_a = delta_a; self.delta_m = delta_m; self.warping = warping
         self._sm = None; self._csm = None; self._paths = None
@@ -51,14 +51,14 @@ class LoCo:
 
     def calculate_similarity_matrix(self):
         if self._sm is None:
-            self._sm = loco_jit.similarity_matrix_ndim(self.ts.astype(np.float32), self.ts2.astype(np.float32), gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
+            self._sm = loco_jit.similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
         return self._sm
 
     def calculate_cumulative_similarity_matrix(self):
         if self._csm is None:
             sm = self.calculate_similarity_matrix()
-            mins1, maxs1 = loco_jit.calculate_bounding_boxes(self.ts.astype(np.float32), 64)
-            mins2, maxs2 = (mins1, maxs1) if self._symmetric else loco_jit.calculate_bounding_boxes(self.ts2.astype(np.float32), 64)
+            mins1, maxs1 = loco_jit.calculate_bounding_boxes(self.ts, 64)
+            mins2, maxs2 = (mins1, maxs1) if self._symmetric else loco_jit.calculate_bounding_boxes(self.ts2, 64)
             func = loco_jit.cumulative_similarity_matrix_warping if self.warping else loco_jit.cumulative_similarity_matrix_no_warping
             self._csm = func(sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, only_triu=self._symmetric, diag_offset=0, mins1=mins1, maxs1=maxs1, mins2=mins2, maxs2=maxs2, gamma=self.gamma)
         return self._csm

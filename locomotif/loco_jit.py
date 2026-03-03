@@ -54,9 +54,9 @@ def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0)
     sm = np.full((n, m), -np.inf, dtype=np.float32)
     for i in prange(n):
         j_start = max(0, i-diag_offset) if only_triu else 0
-        diffs = ts1[i, :] - ts2[j_start:m, :]
-        sq_diffs = np.sum(gamma * np.power(diffs, 2), axis=1)
-        sm[i, j_start:m] = np.exp(-sq_diffs)
+        j_end = m
+        similarities = np.exp(-np.sum(gamma.T * np.power(ts1[i, :] - ts2[j_start:j_end, :], 2), axis=1))
+        sm[i, j_start:j_end] = similarities
     return sm
 
 @njit
@@ -276,7 +276,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     sort_keys = np.empty(len(linear_pos), dtype=np.uint64)
     for i in range(len(linear_pos)):
         v_idx = values.view(np.uint32)[i]
-        sort_keys[i] = (np.uint64(v_idx) << 32) | (np.uint64(0xFFFFFFFF) - np.uint64(linear_pos[i]))
+        sort_keys[i] = (np.uint64(v_idx) << 32) | np.uint64(linear_pos[i])
     _, sort_keys = _radix_sort_u64_with_payload(sort_keys, linear_pos)
     k_best = len(linear_pos) - 1; paths = TypedList.empty_list(int32[:, :])
     while k_best >= 0:
