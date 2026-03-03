@@ -15,13 +15,6 @@ def _create_mask(shape, vwidth, symmetric):
     return mask
 
 
-@loco_jit.njit(cache=True)
-def _orchestrate_graph_data(csm, tau, l_min, vwidth, warping, bp_dir, sm, symmetric):
-    mask = _create_mask(csm.shape, vwidth, symmetric)
-    raw_paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping, bp_dir)
-    return _build_compact_path_graph(raw_paths, sm, symmetric)
-
-
 def find_best_paths_graph_for_instance(lcm, vwidth=None):
     if vwidth is None:
         vwidth = lcm.l_min // 2
@@ -31,16 +24,17 @@ def find_best_paths_graph_for_instance(lcm, vwidth=None):
     if loco_obj._csm is None:
         loco_obj.calculate_cumulative_similarity_matrix()
 
-    lcm._path_data = _orchestrate_graph_data(
+    mask = _create_mask(loco_obj._csm.shape, np.int32(vwidth), loco_obj._symmetric)
+    raw_paths = loco_jit.find_best_paths(
         loco_obj._csm,
+        mask,
         loco_obj.tau,
         np.int32(lcm.l_min),
         np.int32(vwidth),
         loco_obj.warping,
         loco_obj._bp_dir,
-        lcm.self_similarity_matrix,
-        loco_obj._symmetric,
     )
+    lcm._path_data = _build_compact_path_graph(raw_paths, lcm.self_similarity_matrix, loco_obj._symmetric)
     lcm._path_collection = _LazyPathCollection(lcm._path_data)
     lcm._paths = None
     return lcm._path_collection

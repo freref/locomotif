@@ -8,21 +8,39 @@ from numba.types import Array
 from numba import prange
 from numba.typed import List as TypedList
 
-@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32))
+@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32), parallel=True)
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     n, m = len(ts1), len(ts2)
 
     sm = np.full((n, m), -np.inf, dtype=np.float32)
     for i in prange(n):
-
         j_start = max(0, i-diag_offset) if only_triu else 0
-        j_end   = m
-        
-        similarities = np.exp(-np.sum(gamma.T * np.power(ts1[i, :] - ts2[j_start:j_end, :], 2), axis=1))
-        
-        sm[i, j_start:j_end] = similarities
+        similarities = np.exp(-np.sum(gamma.T * np.power(ts1[i, :] - ts2[j_start:m, :], 2), axis=1))
+        sm[i, j_start:m] = similarities
 
     return sm
+
+@njit(cache=True, parallel=True)
+def calculate_bounding_boxes(ts, block_size):
+    n, d = ts.shape
+    num_blocks = (n + block_size - 1) // block_size
+    mins = np.empty((num_blocks, d), dtype=np.float32)
+    maxs = np.empty((num_blocks, d), dtype=np.float32)
+    for b in prange(num_blocks):
+        start = b * block_size
+        end = min(n, start + block_size)
+        for j in range(d):
+            mi = ts[start, j]
+            ma = ts[start, j]
+            for i in range(start + 1, end):
+                v = ts[i, j]
+                if v < mi:
+                    mi = v
+                if v > ma:
+                    ma = v
+            mins[b, j] = mi
+            maxs[b, j] = ma
+    return mins, maxs
 
 @njit(cache=True, parallel=True)
 def _collect_above_threshold(sm, threshold, only_triu):
@@ -181,53 +199,227 @@ def _build_path_no_warping(mask, i, j):
     return path
 
 @njit(cache=True)
-def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
+    length = 0
+    lin = i * m + j
+    buf_idx = len(buf) - 1
+    while i >= 2 and j >= 2:
+        buf[buf_idx, 0] = i
+        buf[buf_idx, 1] = j
+        length += 1
+        buf_idx -= 1
+        d = bp_flat[lin]
+        if d == 0:
+            i -= 1
+            j -= 1
+            lin -= m + 1
+        elif d == 1:
+            i -= 2
+            j -= 1
+            lin -= 2 * m + 1
+        elif d == 2:
+            i -= 1
+            j -= 2
+            lin -= m + 2
+        else:
+            break
+        if mask_flat[lin]:
+            break
+    return length
+
+@njit(cache=True)
+def _radix_sort_u32_with_payload(keys, payload):
+    n = len(keys)
+    tmp_keys = np.empty(n, dtype=np.uint32)
+    tmp_payload = np.empty(n, dtype=payload.dtype)
+    counts = np.empty(65536, dtype=np.int64)
+    offsets = np.empty(65536, dtype=np.int64)
+    mask = np.uint32(65535)
+    for shift in (0, 16):
+        counts[:] = 0
+        for i in range(n):
+            counts[np.int32((keys[i] >> np.uint32(shift)) & mask)] += 1
+        total = np.int64(0)
+        for b in range(65536):
+            offsets[b] = total
+            total += counts[b]
+        for i in range(n):
+            b = np.int32((keys[i] >> np.uint32(shift)) & mask)
+            p = offsets[b]
+            tmp_keys[p] = keys[i]
+            tmp_payload[p] = payload[i]
+            offsets[b] = p + 1
+        keys, tmp_keys = tmp_keys, keys
+        payload, tmp_payload = tmp_payload, payload
+    return keys, payload
+
+@njit(cache=True, parallel=True)
+def _apply_csm_mask(csm, mask):
+    n, m = csm.shape
+    for i in prange(n):
+        for j in range(m):
+            if csm[i, j] <= 0:
+                mask[i, j] = True
+
+@njit(cache=True, parallel=True)
+def _collect_positive_candidates_row_major(csm, mask):
+    n, m = csm.shape
+    row_counts = np.zeros(n, dtype=np.int32)
+    for i in prange(n):
+        if i < 2:
+            continue
+        cnt = 0
+        for j in range(2, m):
+            if not mask[i, j]:
+                cnt += 1
+        row_counts[i] = cnt
+
+    offsets = np.zeros(n, dtype=np.int64)
+    curr = np.int64(0)
+    for i in range(n):
+        offsets[i] = curr
+        curr += row_counts[i]
+
+    linear_pos = np.empty(curr, dtype=np.int64)
+    values = np.empty(curr, dtype=np.float32)
+    for i in prange(n):
+        if row_counts[i] == 0:
+            continue
+        w = offsets[i]
+        for j in range(2, m):
+            if not mask[i, j]:
+                linear_pos[w] = np.int64(i) * np.int64(m) + np.int64(j)
+                values[w] = csm[i, j]
+                w += 1
+    return linear_pos, values
+
+@njit(cache=True)
+def _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start):
+    for k in range(buf_start, len(trace_buf)):
+        i = trace_buf[k, 0]
+        j = trace_buf[k, 1]
+        mask_flat[i * m + j] = True
+        if k > buf_start:
+            pi = trace_buf[k - 1, 0]
+            pj = trace_buf[k - 1, 1]
+            if (i - pi == 2 and j - pj == 1) or (i - pi == 1 and j - pj == 2):
+                mask_flat[(i - 1) * m + (j - 1)] = True
+
+@njit(cache=True)
+def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, mins1=None, maxs1=None, mins2=None, maxs2=None, gamma=None):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    block_size = 64
+    ni = (n + block_size - 1) // block_size
+    nj = (m + block_size - 1) // block_size
 
-    for i in range(n):
+    for bi in range(ni):
+        i_s = bi * block_size
+        i_e = min(n, i_s + block_size)
+        for bj in range(nj):
+            j_s = bj * block_size
+            j_e = min(m, j_s + block_size)
 
-        j_start = max(0, i-diag_offset) if only_triu else 0
-        j_end = m
+            if only_triu and j_e < i_s - diag_offset:
+                continue
 
-        for j in range(j_start, j_end):
+            d2_lb = 0.0
+            for d in range(len(gamma)):
+                diff = 0.0
+                if mins1[bi, d] > maxs2[bj, d]:
+                    diff = mins1[bi, d] - maxs2[bj, d]
+                elif mins2[bj, d] > maxs1[bi, d]:
+                    diff = mins2[bj, d] - maxs1[bi, d]
+                d2_lb += gamma[d] * diff * diff
 
-            sim = sm[i, j]
+            if np.exp(-d2_lb) < tau:
+                any_inc = False
+                for j in range(j_s + 1, j_e + 3):
+                    if csm[i_s + 1, j] > 0.0:
+                        any_inc = True
+                        break
+                if not any_inc:
+                    for i in range(i_s + 1, i_e + 3):
+                        if csm[i, j_s + 1] > 0.0:
+                            any_inc = True
+                            break
+                if not any_inc:
+                    continue
 
-            max_cs, direction = _best_predecessor(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
+            for i in range(i_s, i_e):
+                j_start = max(j_s, i - diag_offset) if only_triu else j_s
+                for j in range(j_start, j_e):
+                    sim = sm[i, j]
+                    ii = i + 2
+                    jj = j + 2
+                    max_cs, direction = _best_predecessor(csm[ii - 1, jj - 1], csm[ii - 2, jj - 1], csm[ii - 1, jj - 2])
 
-            if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
-            else:
-                csm[i + 2, j + 2] = max(0, sim + max_cs)
-            if csm[i + 2, j + 2] > 0:
-                bp_dir[i + 2, j + 2] = direction
+                    if sim < tau:
+                        csm[ii, jj] = max(0, delta_m * max_cs - delta_a)
+                    else:
+                        csm[ii, jj] = max(0, sim + max_cs)
+                    if csm[ii, jj] > 0:
+                        bp_dir[ii, jj] = direction
     return csm, bp_dir
 
 @njit(cache=True)
-def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, mins1=None, maxs1=None, mins2=None, maxs2=None, gamma=None):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    block_size = 64
+    ni = (n + block_size - 1) // block_size
+    nj = (m + block_size - 1) // block_size
 
-    for i in range(n):
+    for bi in range(ni):
+        i_s = bi * block_size
+        i_e = min(n, i_s + block_size)
+        for bj in range(nj):
+            j_s = bj * block_size
+            j_e = min(m, j_s + block_size)
 
-        j_start = max(0, i-diag_offset) if only_triu else 0
-        j_end = m
+            if only_triu and j_e < i_s - diag_offset:
+                continue
 
-        for j in range(j_start, j_end):
+            d2_lb = 0.0
+            for d in range(len(gamma)):
+                diff = 0.0
+                if mins1[bi, d] > maxs2[bj, d]:
+                    diff = mins1[bi, d] - maxs2[bj, d]
+                elif mins2[bj, d] > maxs1[bi, d]:
+                    diff = mins2[bj, d] - maxs1[bi, d]
+                d2_lb += gamma[d] * diff * diff
 
-            sim = sm[i, j]
+            if np.exp(-d2_lb) < tau:
+                any_inc = False
+                for j in range(j_s + 1, j_e + 3):
+                    if csm[i_s + 1, j] > 0.0:
+                        any_inc = True
+                        break
+                if not any_inc:
+                    for i in range(i_s + 1, i_e + 3):
+                        if csm[i, j_s + 1] > 0.0:
+                            any_inc = True
+                            break
+                if not any_inc:
+                    continue
 
-            if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * csm[i - 1 + 2, j - 1 + 2] - delta_a)
-            else:
-                csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
-            if csm[i + 2, j + 2] > 0:
-                bp_dir[i + 2, j + 2] = 0
+            for i in range(i_s, i_e):
+                j_start = max(j_s, i - diag_offset) if only_triu else j_s
+                for j in range(j_start, j_e):
+                    sim = sm[i, j]
+                    ii = i + 2
+                    jj = j + 2
+
+                    if sim < tau:
+                        csm[ii, jj] = max(0, delta_m * csm[ii - 1, jj - 1] - delta_a)
+                    else:
+                        csm[ii, jj] = max(0, sim + csm[ii - 1, jj - 1])
+                    if csm[ii, jj] > 0:
+                        bp_dir[ii, jj] = 0
 
     return csm, bp_dir
 
@@ -314,43 +506,53 @@ def mask_vicinity(path, mask, vwidth=10):
 
 @njit(cache=True)
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
-    mask = mask | (csm <= 0)
-    start_mask = (~mask)
-    pos_i, pos_j = np.nonzero(start_mask)
-    values = np.empty(len(pos_i), dtype=np.float32)
-    for k in range(len(pos_i)):
-        values[k] = csm[pos_i[k], pos_j[k]]
+    _apply_csm_mask(csm, mask)
+    n, m = csm.shape
+    linear_pos, values = _collect_positive_candidates_row_major(csm, mask)
+    if len(linear_pos) == 0:
+        return TypedList.empty_list(int32[:, :])
     perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
-    k_best = len(sorted_pos_i) - 1
+    linear_pos = linear_pos[perm]
+    k_best = len(linear_pos) - 1
     paths = TypedList.empty_list(int32[:, :])
+    mask_flat = mask.reshape(n * m)
+    bp_flat = bp_dir.reshape(n * m) if bp_dir is not None else np.empty(0, dtype=np.int8)
+    trace_buf = np.empty((n + m, 2), dtype=np.int32)
 
     while k_best >= 0:
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
 
         while not path_found:
-            while mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]:
+            while mask_flat[linear_pos[k_best]]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
 
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+            linear_idx = linear_pos[k_best]
             k_best -= 1
+            i_best = linear_idx // np.int64(m)
+            j_best = linear_idx - i_best * np.int64(m)
 
             if i_best < 2 or j_best < 2:
                 return paths
 
             if warping and bp_dir is not None:
-                path = _build_path_warping(bp_dir, mask, i_best, j_best)
+                path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
+                buf_start = len(trace_buf) - path_len
+                path = trace_buf[buf_start:].copy()
             elif warping:
                 path = best_path_warping(csm, mask, i_best, j_best)
             else:
                 path = _build_path_no_warping(mask, i_best, j_best)
 
-            mask = mask_vicinity(path, mask, 0)
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+                mask = mask_vicinity(path, mask, 0)
                 path_found = True
+            elif warping and bp_dir is not None:
+                _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
+            else:
+                mask = mask_vicinity(path, mask, 0)
 
         mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)

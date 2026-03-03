@@ -53,7 +53,24 @@ class LoCo:
     def calculate_cumulative_similarity_matrix(self):
         if self._sm is None:
             self.calculate_similarity_matrix()
-        self._csm, self._bp_dir = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
+
+        block_size = 64
+        mins1, maxs1 = loco_jit.calculate_bounding_boxes(self.ts, block_size)
+        mins2, maxs2 = loco_jit.calculate_bounding_boxes(self.ts2, block_size)
+        self._csm, self._bp_dir = cumulative_similarity_matrix(
+            self._sm,
+            tau=self.tau,
+            delta_a=self.delta_a,
+            delta_m=self.delta_m,
+            warping=self.warping,
+            only_triu=self._symmetric,
+            diag_offset=0,
+            mins1=mins1,
+            maxs1=maxs1,
+            mins2=mins2,
+            maxs2=maxs2,
+            gamma=self.gamma,
+        )
         return self._csm
 
     def find_best_paths(self, l_min=None, vwidth=None):
@@ -101,11 +118,11 @@ def estimate_tau_from_sm(sm, rho, only_triu=False):
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     return loco_jit.similarity_matrix_ndim(ts1, ts2, gamma, only_triu, diag_offset)
 
-def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True, only_triu=False, diag_offset=0, mins1=None, maxs1=None, mins2=None, maxs2=None, gamma=None):
     if warping:
-        return loco_jit.cumulative_similarity_matrix_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
+        return loco_jit.cumulative_similarity_matrix_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset, mins1, maxs1, mins2, maxs2, gamma)
     else:
-        return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
+        return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset, mins1, maxs1, mins2, maxs2, gamma)
 
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping, bp_dir)
