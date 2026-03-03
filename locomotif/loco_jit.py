@@ -253,6 +253,170 @@ def _radix_sort_u32_with_payload(keys, payload):
         payload, tmp_payload = tmp_payload, payload
     return keys, payload
 
+_SMALL_QUICKSORT = 15
+_MAX_QUICKSORT_STACK = 100
+_MAX_PARALLEL_SORT_SEGMENTS = 64
+_MIN_PARALLEL_SORT_SEGMENT = 1000000
+
+@njit(cache=True)
+def _insertion_sort_pairs(vals, payload, low, high):
+    if high <= low:
+        return
+
+    for i in range(low + 1, high + 1):
+        kv = vals[i]
+        kp = payload[i]
+        j = i
+        while j > low and kv < vals[j - 1]:
+            vals[j] = vals[j - 1]
+            payload[j] = payload[j - 1]
+            j -= 1
+        vals[j] = kv
+        payload[j] = kp
+
+@njit(cache=True)
+def _partition_pairs(vals, payload, low, high):
+    mid = (low + high) >> 1
+
+    if vals[mid] < vals[low]:
+        vals[low], vals[mid] = vals[mid], vals[low]
+        payload[low], payload[mid] = payload[mid], payload[low]
+    if vals[high] < vals[mid]:
+        vals[high], vals[mid] = vals[mid], vals[high]
+        payload[high], payload[mid] = payload[mid], payload[high]
+    if vals[mid] < vals[low]:
+        vals[low], vals[mid] = vals[mid], vals[low]
+        payload[low], payload[mid] = payload[mid], payload[low]
+
+    pivot = vals[mid]
+    vals[high], vals[mid] = vals[mid], vals[high]
+    payload[high], payload[mid] = payload[mid], payload[high]
+
+    i = low
+    j = high - 1
+    while True:
+        while i < high and vals[i] < pivot:
+            i += 1
+        while j >= low and pivot < vals[j]:
+            j -= 1
+        if i >= j:
+            break
+        vals[i], vals[j] = vals[j], vals[i]
+        payload[i], payload[j] = payload[j], payload[i]
+        i += 1
+        j -= 1
+
+    vals[i], vals[high] = vals[high], vals[i]
+    payload[i], payload[high] = payload[high], payload[i]
+    return i
+
+@njit(cache=True)
+def _sort_pairs_by_value(vals, payload):
+    n = len(vals)
+    if n < 2:
+        return
+
+    stack_low = np.empty(_MAX_QUICKSORT_STACK, dtype=np.int64)
+    stack_high = np.empty(_MAX_QUICKSORT_STACK, dtype=np.int64)
+    stack_low[0] = 0
+    stack_high[0] = n - 1
+    top = 1
+
+    while top > 0:
+        top -= 1
+        low = stack_low[top]
+        high = stack_high[top]
+
+        while high - low >= _SMALL_QUICKSORT:
+            i = _partition_pairs(vals, payload, low, high)
+            if high - i > i - low:
+                if high > i:
+                    stack_low[top] = i + 1
+                    stack_high[top] = high
+                    top += 1
+                high = i - 1
+            else:
+                if i > low:
+                    stack_low[top] = low
+                    stack_high[top] = i - 1
+                    top += 1
+                low = i + 1
+
+        _insertion_sort_pairs(vals, payload, low, high)
+
+@njit(cache=True)
+def _sort_pairs_segment(vals, payload, low0, high0):
+    if high0 <= low0:
+        return
+
+    stack_low = np.empty(_MAX_QUICKSORT_STACK, dtype=np.int64)
+    stack_high = np.empty(_MAX_QUICKSORT_STACK, dtype=np.int64)
+    stack_low[0] = low0
+    stack_high[0] = high0
+    top = 1
+
+    while top > 0:
+        top -= 1
+        low = stack_low[top]
+        high = stack_high[top]
+
+        while high - low >= _SMALL_QUICKSORT:
+            i = _partition_pairs(vals, payload, low, high)
+            if high - i > i - low:
+                if high > i:
+                    stack_low[top] = i + 1
+                    stack_high[top] = high
+                    top += 1
+                high = i - 1
+            else:
+                if i > low:
+                    stack_low[top] = low
+                    stack_high[top] = i - 1
+                    top += 1
+                low = i + 1
+
+        _insertion_sort_pairs(vals, payload, low, high)
+
+@njit(cache=True, parallel=True)
+def _sort_pairs_segments_parallel(vals, payload, lows, highs, seg_count):
+    for s in prange(seg_count):
+        _sort_pairs_segment(vals, payload, lows[s], highs[s])
+
+@njit(cache=True)
+def _sort_pairs_by_value_parallel(vals, payload):
+    n = len(vals)
+    if n < 2:
+        return
+    if n < _MIN_PARALLEL_SORT_SEGMENT:
+        _sort_pairs_by_value(vals, payload)
+        return
+
+    lows = np.empty(_MAX_PARALLEL_SORT_SEGMENTS, dtype=np.int64)
+    highs = np.empty(_MAX_PARALLEL_SORT_SEGMENTS, dtype=np.int64)
+    seg_count = 1
+    lows[0] = 0
+    highs[0] = n - 1
+    idx = 0
+
+    while idx < seg_count and seg_count < _MAX_PARALLEL_SORT_SEGMENTS:
+        low = lows[idx]
+        high = highs[idx]
+        if high - low < _MIN_PARALLEL_SORT_SEGMENT:
+            idx += 1
+            continue
+
+        i = _partition_pairs(vals, payload, low, high)
+        lows[idx] = low
+        highs[idx] = i - 1
+
+        if high > i:
+            lows[seg_count] = i + 1
+            highs[seg_count] = high
+            seg_count += 1
+        idx += 1
+
+    _sort_pairs_segments_parallel(vals, payload, lows, highs, seg_count)
+
 @njit(cache=True, parallel=True)
 def _apply_csm_mask(csm, mask):
     n, m = csm.shape
@@ -511,8 +675,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     linear_pos, values = _collect_positive_candidates_row_major(csm, mask)
     if len(linear_pos) == 0:
         return TypedList.empty_list(int32[:, :])
-    perm = np.argsort(values)
-    linear_pos = linear_pos[perm]
+    _sort_pairs_by_value_parallel(values, linear_pos)
     k_best = len(linear_pos) - 1
     paths = TypedList.empty_list(int32[:, :])
     mask_flat = mask.reshape(n * m)
