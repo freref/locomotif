@@ -702,6 +702,10 @@ def _find_best_candidate_graph(
     max_size = max(2, int(np.ceil(r / (l_min // 2 + 1))))
     active_paths = np.empty(max_size, dtype=np.int32)
     active_keys = np.empty(max_size, dtype=np.int32)
+    merge_paths = np.empty(max_size, dtype=np.int32)
+    merge_keys = np.empty(max_size, dtype=np.int32)
+    new_paths = np.empty(max_size, dtype=np.int32)
+    new_keys = np.empty(max_size, dtype=np.int32)
     active_size = 0
     next_start_idx = 0
 
@@ -726,21 +730,64 @@ def _find_best_candidate_graph(
             key_idx = index_j[col_base + np.int64(next_j - path_j1[path_idx])]
             active_keys[active_idx] = node_rows[node_base + np.int64(key_idx)]
 
+        group_start = next_start_idx
         while next_start_idx < len(start_order):
             path_idx = start_order[next_start_idx]
             if path_j1[path_idx] != next_j:
                 break
-            col_base = col_offsets[path_idx]
-            node_base = path_starts[path_idx]
-            key_idx = index_j[col_base]
-            key = node_rows[node_base + np.int64(key_idx)]
-            insert_at = np.searchsorted(active_keys[:active_size], key)
-            active_paths[insert_at + 1 : active_size + 1] = active_paths[insert_at:active_size]
-            active_keys[insert_at + 1 : active_size + 1] = active_keys[insert_at:active_size]
-            active_paths[insert_at] = path_idx
-            active_keys[insert_at] = key
-            active_size += 1
             next_start_idx += 1
+
+        group_size = next_start_idx - group_start
+        if group_size > 0:
+            write_idx = 0
+            for idx in range(next_start_idx - 1, group_start - 1, -1):
+                path_idx = start_order[idx]
+                col_base = col_offsets[path_idx]
+                node_base = path_starts[path_idx]
+                key_idx = index_j[col_base]
+                new_paths[write_idx] = path_idx
+                new_keys[write_idx] = node_rows[node_base + np.int64(key_idx)]
+                write_idx += 1
+
+            for idx in range(1, group_size):
+                key = new_keys[idx]
+                path_idx = new_paths[idx]
+                j = idx
+                while j > 0 and key < new_keys[j - 1]:
+                    new_keys[j] = new_keys[j - 1]
+                    new_paths[j] = new_paths[j - 1]
+                    j -= 1
+                new_keys[j] = key
+                new_paths[j] = path_idx
+
+            old_idx = 0
+            new_idx = 0
+            merged_size = active_size + group_size
+            write_idx = 0
+            while old_idx < active_size and new_idx < group_size:
+                if new_keys[new_idx] <= active_keys[old_idx]:
+                    merge_keys[write_idx] = new_keys[new_idx]
+                    merge_paths[write_idx] = new_paths[new_idx]
+                    new_idx += 1
+                else:
+                    merge_keys[write_idx] = active_keys[old_idx]
+                    merge_paths[write_idx] = active_paths[old_idx]
+                    old_idx += 1
+                write_idx += 1
+            while new_idx < group_size:
+                merge_keys[write_idx] = new_keys[new_idx]
+                merge_paths[write_idx] = new_paths[new_idx]
+                new_idx += 1
+                write_idx += 1
+            while old_idx < active_size:
+                merge_keys[write_idx] = active_keys[old_idx]
+                merge_paths[write_idx] = active_paths[old_idx]
+                old_idx += 1
+                write_idx += 1
+
+            active_size = merged_size
+            active_keys[:active_size] = merge_keys[:active_size]
+            active_paths[:active_size] = merge_paths[:active_size]
 
         nb_paths = active_size
         if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:

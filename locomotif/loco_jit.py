@@ -2,7 +2,7 @@ import numpy as np
 
 
 ### JIT
-from numba import int32, int8, float64, float32, boolean
+from numba import int32, int64, int8, float64, float32, boolean
 from numba import njit
 from numba.types import Array
 from numba import prange
@@ -253,6 +253,130 @@ def _radix_sort_u32_with_payload(keys, payload):
         payload, tmp_payload = tmp_payload, payload
     return keys, payload
 
+@njit(boolean(float32, int64, float32, int64))
+def _pair_is_greater(v1, c1, v2, c2):
+    if v1 > v2:
+        return True
+    if v1 < v2:
+        return False
+    return c1 < c2
+
+@njit(cache=True)
+def _heap3_sift_down(values, cells, tiles, start, size):
+    i = start
+    while True:
+        left = 2 * i + 1
+        if left >= size:
+            break
+        right = left + 1
+        largest = left
+        if right < size and _pair_is_greater(values[right], cells[right], values[left], cells[left]):
+            largest = right
+        if _pair_is_greater(values[i], cells[i], values[largest], cells[largest]):
+            break
+        tmp_v = values[i]
+        tmp_c = cells[i]
+        tmp_t = tiles[i]
+        values[i] = values[largest]
+        cells[i] = cells[largest]
+        tiles[i] = tiles[largest]
+        values[largest] = tmp_v
+        cells[largest] = tmp_c
+        tiles[largest] = tmp_t
+        i = largest
+
+@njit(cache=True)
+def _heap3_build(values, cells, tiles, size):
+    for i in range(size // 2 - 1, -1, -1):
+        _heap3_sift_down(values, cells, tiles, i, size)
+
+@njit(cache=True)
+def _heap3_pop_max(values, cells, tiles, size):
+    top_value = values[0]
+    top_cell = cells[0]
+    top_tile = tiles[0]
+    size -= 1
+    if size > 0:
+        values[0] = values[size]
+        cells[0] = cells[size]
+        tiles[0] = tiles[size]
+        _heap3_sift_down(values, cells, tiles, 0, size)
+    return top_value, top_cell, top_tile, size
+
+@njit(cache=True)
+def _heap3_push(values, cells, tiles, size, value, cell, tile):
+    i = size
+    size += 1
+    values[i] = value
+    cells[i] = cell
+    tiles[i] = tile
+    while i > 0:
+        p = (i - 1) // 2
+        if _pair_is_greater(values[p], cells[p], values[i], cells[i]):
+            break
+        tmp_v = values[p]
+        tmp_c = cells[p]
+        tmp_t = tiles[p]
+        values[p] = values[i]
+        cells[p] = cells[i]
+        tiles[p] = tiles[i]
+        values[i] = tmp_v
+        cells[i] = tmp_c
+        tiles[i] = tmp_t
+        i = p
+    return size
+
+@njit(cache=True)
+def _tile_best_candidate(csm, active, tile, n_tile_cols, tile_size):
+    n_rows, n_cols = csm.shape
+    tr = tile // n_tile_cols
+    tc = tile - tr * n_tile_cols
+    i_start = tr * tile_size
+    j_start = tc * tile_size
+    i_end = min(n_rows, i_start + tile_size)
+    j_end = min(n_cols, j_start + tile_size)
+    best_value = np.float32(-np.inf)
+    best_cell = np.int64(-1)
+    for i in range(i_start, i_end):
+        base = np.int64(i) * np.int64(n_cols)
+        for j in range(j_start, j_end):
+            if not active[i, j]:
+                continue
+            value = csm[i, j]
+            cell = base + np.int64(j)
+            if _pair_is_greater(value, cell, best_value, best_cell):
+                best_value = value
+                best_cell = cell
+    return best_value, best_cell
+
+@njit(cache=True, parallel=True)
+def _tile_best_candidates_parallel(csm, active, n_tiles, n_tile_cols, tile_size):
+    n_rows, n_cols = csm.shape
+    values = np.full(n_tiles, np.float32(-np.inf), dtype=np.float32)
+    cells = np.full(n_tiles, np.int64(-1), dtype=np.int64)
+    for tile in prange(n_tiles):
+        tr = tile // n_tile_cols
+        tc = tile - tr * n_tile_cols
+        i_start = tr * tile_size
+        j_start = tc * tile_size
+        i_end = min(n_rows, i_start + tile_size)
+        j_end = min(n_cols, j_start + tile_size)
+        best_value = np.float32(-np.inf)
+        best_cell = np.int64(-1)
+        for i in range(i_start, i_end):
+            base = np.int64(i) * np.int64(n_cols)
+            for j in range(j_start, j_end):
+                if not active[i, j]:
+                    continue
+                value = csm[i, j]
+                cell = base + np.int64(j)
+                if _pair_is_greater(value, cell, best_value, best_cell):
+                    best_value = value
+                    best_cell = cell
+        values[tile] = best_value
+        cells[tile] = best_cell
+    return values, cells
+
 _SMALL_QUICKSORT = 15
 _MAX_QUICKSORT_STACK = 100
 _MAX_PARALLEL_SORT_SEGMENTS = 64
@@ -470,6 +594,148 @@ def _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start):
                 mask_flat[(i - 1) * m + (j - 1)] = True
 
 @njit(cache=True)
+def _mask_buffer_vicinity(trace_buf, buf_start, mask, vwidth):
+    n, m = mask.shape
+    for k in range(buf_start, len(trace_buf)):
+        ic = trace_buf[k, 0]
+        jc = trace_buf[k, 1]
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        mask[ic, j1:j2] = True
+        if k < len(trace_buf) - 1:
+            it = trace_buf[k + 1, 0]
+            jt = trace_buf[k + 1, 1]
+            di = it - ic
+            dj = jt - jc
+            if di == 2 and dj == 1:
+                ii = ic + 1
+                if ii < n:
+                    mask[ii, jc] = True
+                    mask[ii, j1:j2] = True
+            elif di == 1 and dj == 2:
+                jj = jc + 1
+                if jj < m:
+                    mask[ic, jj] = True
+                    mask[i1:i2, jj] = True
+
+@njit(cache=True)
+def _mask_buffer_path_zero_active(mask_flat, active_flat, m, trace_buf, buf_start):
+    for k in range(buf_start, len(trace_buf)):
+        i = trace_buf[k, 0]
+        j = trace_buf[k, 1]
+        lin = i * m + j
+        mask_flat[lin] = True
+        active_flat[lin] = False
+        if k > buf_start:
+            pi = trace_buf[k - 1, 0]
+            pj = trace_buf[k - 1, 1]
+            if (i - pi == 2 and j - pj == 1) or (i - pi == 1 and j - pj == 2):
+                bi = i - 1
+                bj = j - 1
+                lin = bi * m + bj
+                mask_flat[lin] = True
+                active_flat[lin] = False
+
+@njit(cache=True)
+def _mask_vicinity(path, mask, vwidth):
+    n, m = mask.shape
+    for k in range(len(path)):
+        ic = path[k, 0]
+        jc = path[k, 1]
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        mask[ic, j1:j2] = True
+        if k < len(path) - 1:
+            it = path[k + 1, 0]
+            jt = path[k + 1, 1]
+            di = it - ic
+            dj = jt - jc
+            if di == 2 and dj == 1:
+                ii = ic + 1
+                if ii < n:
+                    mask[ii, jc] = True
+                    mask[ii, j1:j2] = True
+            elif di == 1 and dj == 2:
+                jj = jc + 1
+                if jj < m:
+                    mask[ic, jj] = True
+                    mask[i1:i2, jj] = True
+
+@njit(cache=True)
+def _mask_buffer_vicinity_active(trace_buf, buf_start, mask, active, vwidth):
+    n, m = mask.shape
+    for k in range(buf_start, len(trace_buf)):
+        ic = trace_buf[k, 0]
+        jc = trace_buf[k, 1]
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        active[i1:i2, jc] = False
+        mask[ic, j1:j2] = True
+        active[ic, j1:j2] = False
+        if k < len(trace_buf) - 1:
+            it = trace_buf[k + 1, 0]
+            jt = trace_buf[k + 1, 1]
+            di = it - ic
+            dj = jt - jc
+            if di == 2 and dj == 1:
+                ii = ic + 1
+                if ii < n:
+                    mask[ii, jc] = True
+                    active[ii, jc] = False
+                    mask[ii, j1:j2] = True
+                    active[ii, j1:j2] = False
+            elif di == 1 and dj == 2:
+                jj = jc + 1
+                if jj < m:
+                    mask[ic, jj] = True
+                    active[ic, jj] = False
+                    mask[i1:i2, jj] = True
+                    active[i1:i2, jj] = False
+
+@njit(cache=True)
+def _mask_vicinity_active(path, mask, active, vwidth):
+    n, m = mask.shape
+    for k in range(len(path)):
+        ic = path[k, 0]
+        jc = path[k, 1]
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        active[i1:i2, jc] = False
+        mask[ic, j1:j2] = True
+        active[ic, j1:j2] = False
+        if k < len(path) - 1:
+            it = path[k + 1, 0]
+            jt = path[k + 1, 1]
+            di = it - ic
+            dj = jt - jc
+            if di == 2 and dj == 1:
+                ii = ic + 1
+                if ii < n:
+                    mask[ii, jc] = True
+                    active[ii, jc] = False
+                    mask[ii, j1:j2] = True
+                    active[ii, j1:j2] = False
+            elif di == 1 and dj == 2:
+                jj = jc + 1
+                if jj < m:
+                    mask[ic, jj] = True
+                    active[ic, jj] = False
+                    mask[i1:i2, jj] = True
+                    active[i1:i2, jj] = False
+
+@njit(cache=True)
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, mins1=None, maxs1=None, mins2=None, maxs2=None, gamma=None):
     n, m = sm.shape
 
@@ -685,6 +951,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     while k_best >= 0:
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
+        use_buffer_path = False
 
         while not path_found:
             while mask_flat[linear_pos[k_best]]:
@@ -697,27 +964,37 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
             i_best = linear_idx // np.int64(m)
             j_best = linear_idx - i_best * np.int64(m)
 
-            if i_best < 2 or j_best < 2:
-                return paths
-
             if warping and bp_dir is not None:
                 path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
                 buf_start = len(trace_buf) - path_len
-                path = trace_buf[buf_start:].copy()
+                use_buffer_path = True
             elif warping:
                 path = best_path_warping(csm, mask, i_best, j_best)
             else:
                 path = _build_path_no_warping(mask, i_best, j_best)
 
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-                mask = mask_vicinity(path, mask, 0)
+            if use_buffer_path:
+                first_i = trace_buf[buf_start, 0]
+                first_j = trace_buf[buf_start, 1]
+                last_i = trace_buf[len(trace_buf) - 1, 0]
+                last_j = trace_buf[len(trace_buf) - 1, 1]
+                long_enough = (last_i - first_i + 1) >= l_min or (last_j - first_j + 1) >= l_min
+            else:
+                long_enough = (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min
+
+            if long_enough:
                 path_found = True
             elif warping and bp_dir is not None:
                 _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
+                use_buffer_path = False
             else:
                 mask = mask_vicinity(path, mask, 0)
 
-        mask = mask_vicinity(path, mask, vwidth)
+        if use_buffer_path:
+            _mask_buffer_vicinity(trace_buf, buf_start, mask, vwidth)
+            path = trace_buf[buf_start:].copy()
+        else:
+            _mask_vicinity(path, mask, vwidth)
         paths.append(path)
 
     return paths
