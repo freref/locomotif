@@ -300,6 +300,74 @@ def _build_path_no_warping(mask, i, j):
         i, j = i - 1, j - 1
     return path
 
+@njit(cache=True)
+def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
+    length = 0
+    lin = i * m + j
+    buf_idx = len(buf) - 1
+    while i >= 2 and j >= 2:
+        buf[buf_idx, 0] = i
+        buf[buf_idx, 1] = j
+        length += 1
+        buf_idx -= 1
+        d = bp_flat[lin]
+        if d == 0:
+            i -= 1
+            j -= 1
+            lin -= m + 1
+        elif d == 1:
+            i -= 2
+            j -= 1
+            lin -= 2 * m + 1
+        elif d == 2:
+            i -= 1
+            j -= 2
+            lin -= m + 2
+        else:
+            break
+        if mask_flat[lin]:
+            break
+    return length
+
+@njit(cache=True)
+def _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start):
+    for k in range(buf_start, len(trace_buf)):
+        i = trace_buf[k, 0]
+        j = trace_buf[k, 1]
+        mask_flat[i * m + j] = True
+        if k > buf_start:
+            pi = trace_buf[k - 1, 0]
+            pj = trace_buf[k - 1, 1]
+            if (i - pi == 2 and j - pj == 1) or (i - pi == 1 and j - pj == 2):
+                mask_flat[(i - 1) * m + (j - 1)] = True
+
+@njit(cache=True)
+def _mask_buffer_vicinity(trace_buf, buf_start, mask, vwidth):
+    n, m = mask.shape
+    for k in range(buf_start, len(trace_buf)):
+        ic = trace_buf[k, 0]
+        jc = trace_buf[k, 1]
+        i1 = max(0, ic - vwidth)
+        i2 = min(n, ic + vwidth + 1)
+        j1 = max(0, jc - vwidth)
+        j2 = min(m, jc + vwidth + 1)
+        mask[i1:i2, jc] = True
+        mask[ic, j1:j2] = True
+        if k < len(trace_buf) - 1:
+            it = trace_buf[k + 1, 0]
+            jt = trace_buf[k + 1, 1]
+            di = it - ic
+            dj = jt - jc
+            if di == 2 and dj == 1:
+                ii = ic + 1
+                if ii < n:
+                    mask[ii, jc] = True
+                    mask[ii, j1:j2] = True
+            elif di == 1 and dj == 2:
+                jj = jc + 1
+                if jj < m:
+                    mask[ic, jj] = True
+                    mask[i1:i2, jj] = True
 
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32))
 def mask_vicinity(path, mask, vwidth=10):
@@ -402,11 +470,15 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
 
     k_best = len(sorted_pos_i) - 1
     paths = []
+    n, m = csm.shape
+    mask_flat = mask.reshape(n * m)
+    bp_flat = bp_dir.reshape(n * m) if bp_dir is not None else np.empty(0, dtype=np.int8)
+    trace_buf = np.empty((n + m, 2), dtype=np.int32)
 
     while k_best >= 0:
-
         path = np.empty((0, 0), dtype=np.int32)
         path_found = False
+        use_buffer_path = False
 
         while not path_found:
 
@@ -416,21 +488,40 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
                     return paths
 
             i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+            k_best -= 1
 
             if i_best < 2 or j_best < 2:
                 return paths
 
-            if warping:
+            if warping and bp_dir is not None:
+                path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
+                buf_start = len(trace_buf) - path_len
+                use_buffer_path = True
+                first_i = trace_buf[buf_start, 0]
+                first_j = trace_buf[buf_start, 1]
+                last_i = trace_buf[len(trace_buf) - 1, 0]
+                last_j = trace_buf[len(trace_buf) - 1, 1]
+                long_enough = (last_i - first_i + 1) >= l_min or (last_j - first_j + 1) >= l_min
+            elif warping:
                 path = _build_path_warping(bp_dir, mask, i_best, j_best)
+                mask = mask_vicinity(path, mask, 0)
+                long_enough = (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min
             else:
                 path = _build_path_no_warping(mask, i_best, j_best)
+                mask = mask_vicinity(path, mask, 0)
+                long_enough = (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min
 
-            mask = mask_vicinity(path, mask, 0)
-
-            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+            if long_enough:
                 path_found = True
+            elif use_buffer_path:
+                _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
+                use_buffer_path = False
 
-        mask = mask_vicinity(path, mask, vwidth)
+        if use_buffer_path:
+            _mask_buffer_vicinity(trace_buf, buf_start, mask, vwidth)
+            path = trace_buf[buf_start:].copy()
+        else:
+            mask = mask_vicinity(path, mask, vwidth)
         paths.append(path)
 
     return paths
