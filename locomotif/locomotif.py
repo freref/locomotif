@@ -222,6 +222,8 @@ def _append_compact_path(
 
     return path_idx + 1, node_cursor + path_len, col_cursor + col_len, cum_cursor + path_len + 1
 
+
+
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 

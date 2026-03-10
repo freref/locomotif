@@ -941,7 +941,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=Non
     linear_pos, values = _collect_positive_candidates_row_major(csm, mask)
     if len(linear_pos) == 0:
         return TypedList.empty_list(int32[:, :])
-    _sort_pairs_by_value_parallel(values, linear_pos)
+    _, linear_pos = _radix_sort_u32_with_payload(values.view(np.uint32), linear_pos)
     k_best = len(linear_pos) - 1
     paths = TypedList.empty_list(int32[:, :])
     mask_flat = mask.reshape(n * m)
