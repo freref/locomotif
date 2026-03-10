@@ -461,16 +461,16 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
 def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     mask = mask | (csm <= 0)
     start_mask = (~mask)
-
-    pos_i, pos_j = np.nonzero(start_mask)
-
-    values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = radix_argsort_uint64(values.view(np.uint32).astype(np.uint64))
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
-
-    k_best = len(sorted_pos_i) - 1
-    paths = []
     n, m = csm.shape
+    pos_i, pos_j = np.nonzero(start_mask)
+    linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
+    csm_flat = csm.reshape(n * m)
+    values = csm_flat[linear_pos]
+    perm = radix_argsort_uint64(values.view(np.uint32).astype(np.uint64))
+    linear_pos = linear_pos[perm]
+
+    k_best = len(linear_pos) - 1
+    paths = []
     mask_flat = mask.reshape(n * m)
     bp_flat = bp_dir.reshape(n * m) if bp_dir is not None else np.empty(0, dtype=np.int8)
     trace_buf = np.empty((n + m, 2), dtype=np.int32)
@@ -482,13 +482,15 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
 
         while not path_found:
 
-            while mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]:
+            while mask_flat[linear_pos[k_best]]:
                 k_best -= 1
                 if k_best < 0:
                     return paths
 
-            i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+            linear_idx = linear_pos[k_best]
             k_best -= 1
+            i_best = np.int32(linear_idx // np.int64(m))
+            j_best = np.int32(linear_idx - np.int64(i_best) * np.int64(m))
 
             if i_best < 2 or j_best < 2:
                 return paths
