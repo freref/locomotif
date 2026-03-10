@@ -35,6 +35,44 @@ def max3(a, b, c):
             return b
         else:
             return c
+
+@njit
+def radix_argsort_uint64(keys):
+    n = len(keys)
+    perm = np.arange(n, dtype=np.int32)
+    tmp_perm = np.empty(n, dtype=np.int32)
+    work_keys = keys.copy()
+    tmp_keys = np.empty(n, dtype=np.uint64)
+
+    for shift in range(0, 32, 8):
+        counts = np.zeros(256, dtype=np.int64)
+
+        for i in range(n):
+            bucket = int((work_keys[i] >> shift) & np.uint64(255))
+            counts[bucket] += 1
+
+        total = 0
+        for bucket in range(256):
+            count = counts[bucket]
+            counts[bucket] = total
+            total += count
+
+        for i in range(n):
+            bucket = int((work_keys[i] >> shift) & np.uint64(255))
+            idx = counts[bucket]
+            tmp_keys[idx] = work_keys[i]
+            tmp_perm[idx] = perm[i]
+            counts[bucket] = idx + 1
+
+        swap_keys = work_keys
+        work_keys = tmp_keys
+        tmp_keys = swap_keys
+
+        swap_perm = perm
+        perm = tmp_perm
+        tmp_perm = swap_perm
+
+    return perm
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -173,7 +211,7 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     pos_i, pos_j = np.nonzero(start_mask)
     
     values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = np.argsort(values)
+    perm = radix_argsort_uint64(values.view(np.uint32).astype(np.uint64))
     sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
 
     k_best = len(sorted_pos_i) - 1
