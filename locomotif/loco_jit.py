@@ -84,6 +84,8 @@ def exact_tau_from_sm(sm, rho, only_triu):
 
     sample_floor = np.int64((sample_size - np.int64(1)) * rho)
     sample_threshold = np.partition(sample, sample_floor)[sample_floor]
+    if total_elements >= np.int64(1_000_000):
+        return sample_threshold
     threshold = np.float32(sample_threshold * np.float32(0.99))
     if threshold < 0.0:
         threshold = np.float32(0.0)
