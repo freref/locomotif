@@ -1,0 +1,5 @@
+commit	avg_quality	total_seconds	cricket10_quality	cricket10_seconds	mallat10_quality	mallat10_seconds	status	description
+65c02ec	0.6174	197.571502	0.8136	143.695540	0.7546	34.843532	keep	baseline
+wip	0.0000	0.00	0.8136	130.929015	0.7546	35.143474	crash	exact tau smart selector crashes on articulary full run
+wip	0.0000	0.00	0.8136	146.589497	0.7546	34.045703	discard	partition-based exact tau selection
+wip	0.6174	171.809563	0.8136	119.610099	0.7546	30.430232	keep	enable parallel similarity matrix computation
