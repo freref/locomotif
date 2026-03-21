@@ -227,6 +227,16 @@ def collect_linear_positions(mask):
     return out
 
 @njit(cache=True)
+def symmetric_path_mask(n, m, vwidth):
+    mask = np.ones((n, m), dtype=np.bool_)
+    offset = vwidth + 1
+    for i in range(n):
+        j_start = i + offset
+        if j_start < m:
+            mask[i, j_start:] = False
+    return mask
+
+@njit(cache=True)
 def collect_tiled_candidate_positions(start_mask, csm, tile_size):
     n, m = start_mask.shape
     tile_size = max(1, tile_size)

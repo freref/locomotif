@@ -72,11 +72,10 @@ class LoCo:
         if self._csm is None:
             self.calculate_cumulative_similarity_matrix()
 
-        # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
-        mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
-            # First, mask region around the diagional as if the diagonal is already found as a path.
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+            mask = loco_jit.symmetric_path_mask(self._csm.shape[0], self._csm.shape[1], vwidth)
+        else:
+            mask = np.zeros(self._csm.shape, dtype=np.bool_)
 
         paths = loco_jit.find_best_paths_with_bp(self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir)
         paths = [path-2 for path in paths]

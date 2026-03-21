@@ -17,4 +17,5 @@ wip	0.0000	0.00	0.7664	123.192579	0.7331	39.357048	discard	use exact row-frontie
 wip	0.0000	0.00	0.8508	101.453472	0.7331	34.169263	discard	use tighter exact tau threshold factor 0.999
 wip	0.0000	0.00	0.8508	99.645593	0.7331	33.329902	discard	use tighter exact tau threshold factor 0.995
 wip	0.0000	0.00	0.8519	120.556784	0.7331	33.135692	discard	use no-dist row-frontier candidate selection
-WIPCOMMIT	0.6176	131.084281	0.8508	92.733710	0.7331	26.553232	keep	use float32 gamma in similarity kernel
+0f779b1	0.6176	131.084281	0.8508	92.733710	0.7331	26.553232	keep	use float32 gamma in similarity kernel
+WIPCOMMIT	0.6176	90.178039	0.8508	69.928088	0.7331	22.431189	keep	use direct symmetric band mask setup
