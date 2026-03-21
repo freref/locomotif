@@ -273,6 +273,45 @@ def collect_tiled_candidate_positions(start_mask, csm, tile_size):
     if count == 0:
         return collect_linear_positions(start_mask)
     return out[:count]
+
+@njit(cache=True)
+def collect_tiled_candidate_positions_threshold(mask, csm, threshold, tile_size):
+    n, m = mask.shape
+    tile_size = max(1, tile_size)
+    n_tiles_i = (n + tile_size - 1) // tile_size
+    n_tiles_j = (m + tile_size - 1) // tile_size
+    max_candidates = n_tiles_i * n_tiles_j
+    out = np.empty(max_candidates, dtype=np.int64)
+    count = 0
+
+    for tile_i in range(n_tiles_i):
+        i_start = tile_i * tile_size
+        i_end = min(n, i_start + tile_size)
+        for tile_j in range(n_tiles_j):
+            j_start = tile_j * tile_size
+            j_end = min(m, j_start + tile_size)
+            best_i = -1
+            best_j = -1
+            best_val = np.float32(0.0)
+            for i in range(i_start, i_end):
+                for j in range(j_start, j_end):
+                    if mask[i, j]:
+                        continue
+                    value = csm[i, j]
+                    if value < threshold:
+                        continue
+                    if best_i == -1 or value > best_val:
+                        best_i = i
+                        best_j = j
+                        best_val = value
+            if best_i != -1:
+                out[count] = np.int64(best_i) * np.int64(m) + np.int64(best_j)
+                count += 1
+
+    if count == 0:
+        fallback_mask = (~mask) & (csm >= threshold)
+        return collect_linear_positions(fallback_mask)
+    return out[:count]
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -662,9 +701,9 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
 def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     mask = mask | (csm <= 0)
     min_path_length = l_min if not warping else max(1, (l_min + 1) // 2)
-    start_mask = (~mask) & (csm >= tau * min_path_length)
     n, m = csm.shape
-    linear_pos = collect_tiled_candidate_positions(start_mask, csm, vwidth)
+    threshold = tau * min_path_length
+    linear_pos = collect_tiled_candidate_positions_threshold(mask, csm, threshold, vwidth)
     csm_flat = csm.reshape(n * m)
     values = csm_flat[linear_pos].view(np.uint32)
     _, linear_pos = radix_sort_u32_with_payload(values, linear_pos)

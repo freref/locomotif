@@ -1,4 +1,5 @@
 commit	avg_quality	total_seconds	cricket100_quality	cricket100_seconds	mallat100_quality	mallat100_seconds	status	description
 2f38117	0.6086	282.131303	0.8193	200.814070	0.6726	47.236650	keep	baseline
 wip	0.0000	0.00	0.8419	211.865299	0.6746	55.836590	discard	use 2x path seed tiles on large matrices
-WIPCOMMIT	0.6086	250.632533	0.8193	186.189514	0.6726	46.591525	keep	skip zero-valued penalized CSM cells
+3c5c675	0.6086	250.632533	0.8193	186.189514	0.6726	46.591525	keep	skip zero-valued penalized CSM cells
+WIPCOMMIT	0.6086	222.607959	0.8193	169.134453	0.6726	41.712635	keep	collect tiled candidates directly from mask and threshold
