@@ -3,3 +3,8 @@ commit	avg_quality	total_seconds	cricket10_quality	cricket10_seconds	mallat10_qu
 wip	0.0000	0.00	0.8136	130.929015	0.7546	35.143474	crash	exact tau smart selector crashes on articulary full run
 wip	0.0000	0.00	0.8136	146.589497	0.7546	34.045703	discard	partition-based exact tau selection
 wip	0.6174	171.809563	0.8136	119.610099	0.7546	30.430232	keep	enable parallel similarity matrix computation
+wip	0.6174	168.730460	0.8136	116.808577	0.7546	30.098334	discard	block-pruned cumulative similarity
+wip	0.6044	86.911088	0.8219	59.860323	0.7546	18.238443	discard	tiled path candidates and endpoint suppression
+wip	0.0000	0.00	0.7927	99.222038	0.7546	19.340983	discard	thresholded path candidates with local endpoint suppression
+wip	0.0000	0.00	0.8136	123.375236	0.7546	29.362555	discard	use backpointer buffer for no-warping paths too
+wip	0.6174	164.347905	0.8136	109.340072	0.7546	28.065314	keep	radix sort candidate scores with payload positions
