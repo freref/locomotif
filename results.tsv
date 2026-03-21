@@ -1,14 +1,10 @@
-commit	avg_quality	total_seconds	cricket10_quality	cricket10_seconds	mallat10_quality	mallat10_seconds	status	description
-65c02ec	0.6174	197.571502	0.8136	143.695540	0.7546	34.843532	keep	baseline
-wip	0.0000	0.00	0.8136	130.929015	0.7546	35.143474	crash	exact tau smart selector crashes on articulary full run
-wip	0.0000	0.00	0.8136	146.589497	0.7546	34.045703	discard	partition-based exact tau selection
-wip	0.6174	171.809563	0.8136	119.610099	0.7546	30.430232	keep	enable parallel similarity matrix computation
-wip	0.6174	168.730460	0.8136	116.808577	0.7546	30.098334	discard	block-pruned cumulative similarity
-wip	0.6044	86.911088	0.8219	59.860323	0.7546	18.238443	discard	tiled path candidates and endpoint suppression
-wip	0.0000	0.00	0.7927	99.222038	0.7546	19.340983	discard	thresholded path candidates with local endpoint suppression
-wip	0.0000	0.00	0.8136	123.375236	0.7546	29.362555	discard	use backpointer buffer for no-warping paths too
-wip	0.6174	164.347905	0.8136	109.340072	0.7546	28.065314	keep	radix sort candidate scores with payload positions
-wip	0.6174	140.154313	0.8136	105.745657	0.7546	27.482240	keep	actual radix sort candidate scores with payload positions
-wip	0.0000	0.00	0.8136	111.140220	0.7546	28.187691	discard	block-pruned cumulative similarity on sort baseline
-wip	0.6165	121.731870	0.8136	94.392883	0.7546	17.999602	keep	threshold start candidates by minimum plausible path score
-wip	0.6165	118.651494	0.8136	90.775805	0.7546	17.612019	keep	collect linear candidate positions directly
+commit	avg_quality	total_seconds	cricket25_quality	cricket25_seconds	mallat25_quality	mallat25_seconds	status	description
+73c2d4d	0.6176	146.768870	0.8508	106.010711	0.7331	29.133429	keep	baseline
+wip	0.0000	0.00	0.8516	110.771631	0.7331	36.742131	discard	double tile size for path seed candidates
+wip	0.0000	0.00	0.8508	110.595667	0.7131	35.531944	discard	raise minimum path seed score floor
+wip	0.0000	0.00	0.8508	112.691869	0.7331	36.800248	discard	enable block-pruned cumulative similarity on larger inputs
+wip	0.0000	0.00	0.8440	110.990591	0.7348	36.058652	discard	use 1.5x tile size for path seed candidates
+wip	0.0000	0.00	0.8508	113.357220	0.7331	34.742433	discard	use coarser exact-tau sampling step
+wip	0.0000	0.00	0.8508	110.530795	0.7331	35.932401	discard	run DP and path kernels with float32 scalar parameters
+wip	0.0000	0.00	0.8508	111.453151	0.7331	35.223713	discard	mask buffered path vicinity through flat writes
+WIPCOMMIT	0.6176	141.784902	0.8508	96.241580	0.7331	25.407932	keep	use scalar fastmath similarity kernel
