@@ -113,6 +113,25 @@ def radix_sort_u32_with_payload(keys, payload):
         payload, tmp_payload = tmp_payload, payload
 
     return keys, payload
+
+@njit(cache=True)
+def collect_linear_positions(mask):
+    n, m = mask.shape
+    count = 0
+    for i in range(n):
+        for j in range(m):
+            if mask[i, j]:
+                count += 1
+
+    out = np.empty(count, dtype=np.int64)
+    write_idx = 0
+    for i in range(n):
+        base = np.int64(i) * np.int64(m)
+        for j in range(m):
+            if mask[i, j]:
+                out[write_idx] = base + np.int64(j)
+                write_idx += 1
+    return out
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -490,8 +509,7 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
     min_path_length = l_min if not warping else max(1, (l_min + 1) // 2)
     start_mask = (~mask) & (csm >= tau * min_path_length)
     n, m = csm.shape
-    pos_i, pos_j = np.nonzero(start_mask)
-    linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
+    linear_pos = collect_linear_positions(start_mask)
     csm_flat = csm.reshape(n * m)
     values = csm_flat[linear_pos].view(np.uint32)
     _, linear_pos = radix_sort_u32_with_payload(values, linear_pos)
