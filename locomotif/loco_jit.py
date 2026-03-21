@@ -438,8 +438,8 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
     
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    start_mask = (~mask) # & (csm >= tau * min_path_length)
+    min_path_length = l_min if not warping else max(1, (l_min + 1) // 2)
+    start_mask = (~mask) & (csm >= tau * min_path_length)
     
     pos_i, pos_j = np.nonzero(start_mask)
     
@@ -487,7 +487,8 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
 @njit(cache=True)
 def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
     mask = mask | (csm <= 0)
-    start_mask = (~mask)
+    min_path_length = l_min if not warping else max(1, (l_min + 1) // 2)
+    start_mask = (~mask) & (csm >= tau * min_path_length)
     n, m = csm.shape
     pos_i, pos_j = np.nonzero(start_mask)
     linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
