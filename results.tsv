@@ -8,3 +8,4 @@ wip	0.6044	86.911088	0.8219	59.860323	0.7546	18.238443	discard	tiled path candid
 wip	0.0000	0.00	0.7927	99.222038	0.7546	19.340983	discard	thresholded path candidates with local endpoint suppression
 wip	0.0000	0.00	0.8136	123.375236	0.7546	29.362555	discard	use backpointer buffer for no-warping paths too
 wip	0.6174	164.347905	0.8136	109.340072	0.7546	28.065314	keep	radix sort candidate scores with payload positions
+wip	0.6174	140.154313	0.8136	105.745657	0.7546	27.482240	keep	actual radix sort candidate scores with payload positions

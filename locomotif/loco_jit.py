@@ -82,6 +82,37 @@ def radix_argsort_uint64(keys):
         tmp_perm = swap_perm
 
     return perm
+
+@njit
+def radix_sort_u32_with_payload(keys, payload):
+    n = len(keys)
+    tmp_keys = np.empty(n, dtype=np.uint32)
+    tmp_payload = np.empty(n, dtype=payload.dtype)
+    counts = np.empty(65536, dtype=np.int64)
+    offsets = np.empty(65536, dtype=np.int64)
+    mask = np.uint32(65535)
+
+    for shift in (0, 16):
+        counts[:] = 0
+        for i in range(n):
+            counts[np.int32((keys[i] >> np.uint32(shift)) & mask)] += 1
+
+        total = np.int64(0)
+        for bucket in range(65536):
+            offsets[bucket] = total
+            total += counts[bucket]
+
+        for i in range(n):
+            bucket = np.int32((keys[i] >> np.uint32(shift)) & mask)
+            pos = offsets[bucket]
+            tmp_keys[pos] = keys[i]
+            tmp_payload[pos] = payload[i]
+            offsets[bucket] = pos + 1
+
+        keys, tmp_keys = tmp_keys, keys
+        payload, tmp_payload = tmp_payload, payload
+
+    return keys, payload
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -461,9 +492,8 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
     pos_i, pos_j = np.nonzero(start_mask)
     linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
     csm_flat = csm.reshape(n * m)
-    values = csm_flat[linear_pos]
-    perm = radix_argsort_uint64(values.view(np.uint32).astype(np.uint64))
-    linear_pos = linear_pos[perm]
+    values = csm_flat[linear_pos].view(np.uint32)
+    _, linear_pos = radix_sort_u32_with_payload(values, linear_pos)
 
     k_best = len(linear_pos) - 1
     paths = []
