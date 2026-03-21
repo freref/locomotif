@@ -77,7 +77,9 @@ class LoCo:
         else:
             mask = np.zeros(self._csm.shape, dtype=np.bool_)
 
-        paths = loco_jit.find_best_paths_with_bp(self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir)
+        paths = loco_jit.find_best_paths_with_bp(
+            self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._symmetric
+        )
         paths = [path-2 for path in paths]
 
         if self._symmetric:

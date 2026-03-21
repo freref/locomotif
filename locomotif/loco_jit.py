@@ -312,6 +312,60 @@ def collect_tiled_candidate_positions_threshold(mask, csm, threshold, tile_size)
         fallback_mask = (~mask) & (csm >= threshold)
         return collect_linear_positions(fallback_mask)
     return out[:count]
+
+@njit(cache=True)
+def collect_tiled_candidate_positions_threshold_symmetric(csm, threshold, tile_size, diag_gap):
+    n, m = csm.shape
+    tile_size = max(1, tile_size)
+    n_tiles_i = (n + tile_size - 1) // tile_size
+    n_tiles_j = (m + tile_size - 1) // tile_size
+    max_candidates = n_tiles_i * n_tiles_j
+    out = np.empty(max_candidates, dtype=np.int64)
+    count = 0
+
+    for tile_i in range(n_tiles_i):
+        i_start = tile_i * tile_size
+        i_end = min(n, i_start + tile_size)
+        for tile_j in range(n_tiles_j):
+            j_start = tile_j * tile_size
+            j_end = min(m, j_start + tile_size)
+            if j_end <= i_start + diag_gap:
+                continue
+
+            best_i = -1
+            best_j = -1
+            best_val = np.float32(0.0)
+            for i in range(i_start, i_end):
+                row_j_start = max(j_start, i + diag_gap)
+                for j in range(row_j_start, j_end):
+                    value = csm[i, j]
+                    if value < threshold:
+                        continue
+                    if best_i == -1 or value > best_val:
+                        best_i = i
+                        best_j = j
+                        best_val = value
+            if best_i != -1:
+                out[count] = np.int64(best_i) * np.int64(m) + np.int64(best_j)
+                count += 1
+
+    if count == 0:
+        count = 0
+        for i in range(n):
+            for j in range(i + diag_gap, m):
+                if csm[i, j] >= threshold:
+                    count += 1
+
+        out = np.empty(count, dtype=np.int64)
+        write_idx = 0
+        for i in range(n):
+            for j in range(i + diag_gap, m):
+                if csm[i, j] >= threshold:
+                    out[write_idx] = np.int64(i) * np.int64(m) + np.int64(j)
+                    write_idx += 1
+        return out
+
+    return out[:count]
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -698,12 +752,15 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     return paths
 
 @njit(cache=True)
-def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
+def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, symmetric=False):
     mask = mask | (csm <= 0)
     min_path_length = l_min if not warping else max(1, (l_min + 1) // 2)
     n, m = csm.shape
     threshold = tau * min_path_length
-    linear_pos = collect_tiled_candidate_positions_threshold(mask, csm, threshold, vwidth)
+    if symmetric:
+        linear_pos = collect_tiled_candidate_positions_threshold_symmetric(csm, threshold, vwidth, vwidth + 1)
+    else:
+        linear_pos = collect_tiled_candidate_positions_threshold(mask, csm, threshold, vwidth)
     csm_flat = csm.reshape(n * m)
     values = csm_flat[linear_pos].view(np.uint32)
     _, linear_pos = radix_sort_u32_with_payload(values, linear_pos)
