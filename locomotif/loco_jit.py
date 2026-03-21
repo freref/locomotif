@@ -279,6 +279,7 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    zero_cutoff = delta_a / delta_m
 
     for i in range(n):
 
@@ -292,6 +293,8 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
             max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
 
             if sim < tau:
+                if max_cs <= zero_cutoff:
+                    continue
                 csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
             else:
                 csm[i + 2, j + 2] = max(0, sim + max_cs)
@@ -303,6 +306,7 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    zero_cutoff = delta_a / delta_m
 
     for i in range(n):
 
@@ -319,6 +323,8 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
             )
 
             if sim < tau:
+                if max_cs <= zero_cutoff:
+                    continue
                 csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
             else:
                 csm[i + 2, j + 2] = max(0, sim + max_cs)
@@ -333,6 +339,7 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    zero_cutoff = delta_a / delta_m
 
     for i in range(n):
 
@@ -344,7 +351,10 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
             sim = sm[i, j]
 
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * csm[i - 1 + 2, j - 1 + 2] - delta_a)
+                prev = csm[i - 1 + 2, j - 1 + 2]
+                if prev <= zero_cutoff:
+                    continue
+                csm[i + 2, j + 2] = max(0, delta_m * prev - delta_a)
             else:
                 csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
 
@@ -356,6 +366,7 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    zero_cutoff = delta_a / delta_m
 
     for i in range(n):
 
@@ -367,7 +378,10 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
             sim = sm[i, j]
 
             if sim < tau:
-                csm[i + 2, j + 2] = max(0, delta_m * csm[i - 1 + 2, j - 1 + 2] - delta_a)
+                prev = csm[i - 1 + 2, j - 1 + 2]
+                if prev <= zero_cutoff:
+                    continue
+                csm[i + 2, j + 2] = max(0, delta_m * prev - delta_a)
             else:
                 csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
 
