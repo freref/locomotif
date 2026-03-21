@@ -7,4 +7,14 @@ wip	0.0000	0.00	0.8440	110.990591	0.7348	36.058652	discard	use 1.5x tile size fo
 wip	0.0000	0.00	0.8508	113.357220	0.7331	34.742433	discard	use coarser exact-tau sampling step
 wip	0.0000	0.00	0.8508	110.530795	0.7331	35.932401	discard	run DP and path kernels with float32 scalar parameters
 wip	0.0000	0.00	0.8508	111.453151	0.7331	35.223713	discard	mask buffered path vicinity through flat writes
-WIPCOMMIT	0.6176	141.784902	0.8508	96.241580	0.7331	25.407932	keep	use scalar fastmath similarity kernel
+cc49570	0.6176	141.784902	0.8508	96.241580	0.7331	25.407932	keep	use scalar fastmath similarity kernel
+wip	0.0000	0.00	0.8508	112.151330	0.7331	37.178976	discard	enable fastmath on cumulative-similarity kernels
+wip	0.0000	0.00	0.8508	132.227683	0.7331	37.315388	discard	use histogram bucket tail collection for exact tau
+wip	0.0000	0.00	0.8508	108.050675	0.7331	36.826610	discard	use bucketed approximate candidate ordering
+wip	0.0000	0.00	0.8436	133.452523	0.7331	44.065153	discard	add saturating path-length gating for seed selection
+wip	0.0000	0.00	0.0000	129.453830	0.7331	37.314701	discard	use sparse warping CSM on larger series
+wip	0.0000	0.00	0.7664	123.192579	0.7331	39.357048	discard	use exact row-frontier path search on large series
+wip	0.0000	0.00	0.8508	101.453472	0.7331	34.169263	discard	use tighter exact tau threshold factor 0.999
+wip	0.0000	0.00	0.8508	99.645593	0.7331	33.329902	discard	use tighter exact tau threshold factor 0.995
+wip	0.0000	0.00	0.8519	120.556784	0.7331	33.135692	discard	use no-dist row-frontier candidate selection
+WIPCOMMIT	0.6176	131.084281	0.8508	92.733710	0.7331	26.553232	keep	use float32 gamma in similarity kernel

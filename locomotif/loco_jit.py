@@ -7,7 +7,7 @@ from numba import njit
 from numba.types import List, Array
 from numba import prange
 
-@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean, int32), parallel=True, fastmath=True)
+@njit(float32[:, :](float32[:, :], float32[:, :], float32[:], boolean, int32), parallel=True, fastmath=True)
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     n, m = len(ts1), len(ts2)
     d = ts1.shape[1]
@@ -16,7 +16,7 @@ def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0)
     for i in prange(n):
         j_start = max(0, i - diag_offset) if only_triu else 0
         for j in range(j_start, m):
-            acc = 0.0
+            acc = np.float32(0.0)
             for k in range(d):
                 diff = ts1[i, k] - ts2[j, k]
                 acc += gamma[k] * diff * diff
