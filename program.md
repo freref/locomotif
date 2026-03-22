@@ -12,7 +12,7 @@ To set up a new experiment, work with the user to:
    - `locomotif/loco.py` — LoCo wrapper, tau estimation, cumulative similarity entrypoints.
    - `locomotif/loco_jit.py` — core kernels, path extraction, sorting, pruning.
    - `/Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling/compact_profiling_all_quality.py` — benchmark harness. Do not modify.
-2. **Verify the profiling workspace exists**: Check that the sister directory `/Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling` exists and that `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --max-cases 100` runs there. If not, tell the human what is missing.
+2. **Verify the profiling workspace exists**: Check that the sister directory `/Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling` exists and that `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py` runs there. If not, tell the human what is missing.
 3. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
 4. **Confirm and go**: Confirm setup looks good.
 
@@ -22,9 +22,9 @@ Once you get confirmation, kick off the experimentation.
 
 Each experiment is benchmarked on the profiling workspace. The primary benchmark is:
 
-`cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --max-cases 100`
+`cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py`
 
-The `--max-cases 100` baseline must be re-established before comparing experiments.
+The full-run baseline from `uv run python compact_profiling_all_quality.py` must be re-established before comparing experiments.
 
 **What you CAN do:**
 - Modify `locomotif/locomotif.py`, `locomotif/loco.py`, and `locomotif/loco_jit.py`.
@@ -48,7 +48,7 @@ The `--max-cases 100` baseline must be re-established before comparing experimen
 
 **Large-series safety**: Assume future runs may use very large time series. Avoid changes that risk integer overflow, indexing overflow, or size-dependent corruption on much larger inputs.
 
-**The goal is simple: improve speed and quality together on the full `--max-cases 100` benchmark, with a concrete target of getting `uv run python compact_profiling_all_quality.py --max-cases 100` under 100 seconds.** Favor global strategies that make sense across datasets, time-series lengths, and much larger future inputs. Prefer changes that improve the underlying complexity, pruning power, or search structure.
+**The goal is simple: improve speed and quality together on the full `uv run python compact_profiling_all_quality.py` benchmark, with a concrete target of beating the current `343.783738`-second baseline while preserving or improving quality.** Favor global strategies that make sense across datasets, time-series lengths, and much larger future inputs. Prefer changes that improve the underlying complexity, pruning power, or search structure.
 
 **Quality-first criterion**: When speed and quality move in opposite directions, quality usually comes first. Keep a change only if it improves the overall tradeoff. A speedup with a noticeable quality drop is usually not worth it. A small quality gain with similar runtime is worth it. Equal quality with a meaningful speedup is also worth it. Tiny quality regressions are acceptable if the speed gain is very large.
 
@@ -89,26 +89,28 @@ When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-se
 The TSV has a header row and 9 columns:
 
 ```
-commit	avg_quality	total_seconds	cricket100_quality	cricket100_seconds	mallat100_quality	mallat100_seconds	status	description
+commit	avg_quality	total_seconds	cricket_quality	cricket_seconds	mallat_quality	mallat_seconds	status	description
 ```
 
 1. git commit hash (short, 7 chars) or `wip`
-2. average quality on the full `--max-cases 100` benchmark
-3. total runtime on the full `--max-cases 100` benchmark
-4. quality on `--benchmark cricket --max-cases 100`
-5. runtime on `--benchmark cricket --max-cases 100`
-6. quality on `--benchmark mallat --max-cases 100`
-7. runtime on `--benchmark mallat --max-cases 100`
+2. average quality on the full `uv run python compact_profiling_all_quality.py` benchmark
+3. total runtime on the full `uv run python compact_profiling_all_quality.py` benchmark
+4. quality on `uv run python compact_profiling_all_quality.py --benchmark cricket`
+5. runtime on `uv run python compact_profiling_all_quality.py --benchmark cricket`
+6. quality on `uv run python compact_profiling_all_quality.py --benchmark mallat`
+7. runtime on `uv run python compact_profiling_all_quality.py --benchmark mallat`
 8. status: `keep`, `discard`, or `crash`
 9. short text description of what this experiment tried
+
+If you seed `results.tsv` from a provided full-run baseline that does not include screening runtimes, write `na` in those unavailable screening runtime columns until you rerun the screening benchmarks.
 
 Example:
 
 ```
-commit	avg_quality	total_seconds	cricket100_quality	cricket100_seconds	mallat100_quality	mallat100_seconds	status	description
-a1b2c3d	0.6174	194.17	0.8136	138.14	0.7546	31.03	keep	baseline
-b2c3d4e	0.6210	186.50	0.8200	129.00	0.7600	28.80	keep	use smarter tau estimate
-c3d4e5f	0.6120	175.10	0.7900	120.00	0.7400	26.00	discard	aggressive endpoint pruning
+commit	avg_quality	total_seconds	cricket_quality	cricket_seconds	mallat_quality	mallat_seconds	status	description
+785126d	0.6069	343.78	0.8174	na	0.6724	na	keep	baseline
+b2c3d4e	0.6090	336.50	0.8200	248.00	0.6740	39.80	keep	use smarter tau estimate
+c3d4e5f	0.6120	330.10	0.7900	236.00	0.7400	35.50	discard	aggressive endpoint pruning
 d4e5f6g	0.0000	0.00	0.0000	0.00	0.0000	0.00	crash	broken sparse backtracking
 ```
 
@@ -121,15 +123,15 @@ LOOP FOREVER:
 1. Look at the git state: the current branch/commit we're on.
 2. Tune the approximation code with one experimental idea by directly hacking the code.
 3. Run the screening benchmarks:
-   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark cricket --max-cases 100 > run_cricket.log 2>&1`
-   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark mallat --max-cases 100 > run_mallat.log 2>&1`
+   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark cricket > run_cricket.log 2>&1`
+   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark mallat > run_mallat.log 2>&1`
 4. Read out the screening results:
    - `grep "^average_quality_score=\|^total_seconds=" run_cricket.log`
    - `grep "^average_quality_score=\|^total_seconds=" run_mallat.log`
 5. If either screening run crashes, run `tail -n 50` on the corresponding log, decide whether the issue is fixable, and either retry or discard.
 6. If the screening tradeoff is clearly bad, discard immediately and revert to where you started.
 7. If screening looks promising, run the promotion benchmark:
-   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --max-cases 100 > run.log 2>&1`
+   - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py > run.log 2>&1`
 8. Read out the promotion results:
    - `grep "^average_quality_score=\|^total_seconds=" run.log`
 9. Record the results in the TSV.
@@ -144,7 +146,7 @@ LOOP FOREVER:
 
 The idea is that you are an autonomous researcher trying one structural idea at a time. If it works, keep it. If it does not, throw it away and continue.
 
-**Timeout**: The full `--max-cases 100` benchmark can take several minutes. If a run exceeds 15 minutes, kill it and treat it as a failure.
+**Timeout**: The full `uv run python compact_profiling_all_quality.py` benchmark can take several minutes. If a run exceeds 15 minutes, kill it and treat it as a failure.
 
 **Crashes**: If a run crashes due to a simple bug, fix it and re-run. If the idea itself is fundamentally broken, log `crash`, discard it, and move on.
 
