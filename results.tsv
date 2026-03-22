@@ -21,4 +21,4 @@ wip	0.0000	0.00	0.8193	158.324466	0.6726	33.629864	discard	interpolate sampled t
 wip	0.0000	0.00	0.8193	155.628449	0.6726	29.332012	discard	factor graph induced-path bounds into a tighter helper
 wip	0.0000	0.00	0.8193	152.243744	0.6726	30.201201	discard	collapse csm dispatch branches and unpack graph tuples explicitly
 wip	0.6094	198.321341	0.8193	154.231175	0.6726	27.942272	discard	normalize path contiguity upstream in LoCo.find_best_paths
-wip	0.6094	193.824441	0.8193	149.127733	0.6726	26.641406	keep	cache mirrored-path requirement during graph sizing
+ae24f4d	0.6094	193.824441	0.8193	149.127733	0.6726	26.641406	keep	cache mirrored-path requirement during graph sizing
