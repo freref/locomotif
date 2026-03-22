@@ -115,7 +115,10 @@ class LoCo:
 
         if self._symmetric:
             shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
-            mask = loco_jit.symmetric_path_mask(shape[0], shape[1], vwidth)
+            if self._csm is None and self.warping:
+                mask = np.empty((0, 0), dtype=np.bool_)
+            else:
+                mask = loco_jit.symmetric_path_mask(shape[0], shape[1], vwidth)
         else:
             shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
             mask = np.zeros(shape, dtype=np.bool_)
@@ -126,7 +129,7 @@ class LoCo:
             )
         else:
             paths = loco_jit.find_best_paths_with_bp_compact(
-                mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos, self._candidate_values
+                mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos, self._candidate_values, self._symmetric, np.int32(vwidth + 1)
             )
         paths = [path-2 for path in paths]
 

@@ -34,3 +34,13 @@ wip	0.6094	193.853797	0.8193	140.056593	0.6726	25.143145	discard	remove redundan
 wip	0.6094	191.448245	0.8193	142.070640	0.6726	26.163565	discard	remove LoCoMotif path-object fallback branches from main flow
 df182de	0.6094	192.081046	0.8193	138.812267	0.6726	22.806163	keep	re-establish baseline on warmed machine state
 6b3d6d0	0.6094	191.288448	0.8193	145.345371	0.6726	27.658971	keep	remove LoCoMotif path-object fallback branches from main flow
+f02c29e	0.6094	190.646283	0.8193	138.995823	0.6726	23.159377	keep	re-establish baseline on current branch head
+wip	0.0000	0.00	0.8193	142.703845	0.6726	30.016629	discard	collapse duplicate graph scorer masks into one prefix
+wip	0.6094	192.983138	0.8193	151.798815	0.6726	37.713774	discard	remove dead tiled candidate seed helper
+wip	0.0000	0.00	0.8193	152.366986	0.6726	27.029971	discard	use single-pass induced path extraction buffer
+wip	0.0000	0.00	0.8193	154.162127	0.6726	26.070709	discard	cache similarity kernel rows inside inner loop
+wip	0.0000	0.00	0.8193	150.176569	0.6726	33.792590	discard	reuse local CSM values in backpointer kernels
+12405ec	0.6094	175.800225	0.8193	134.430427	0.6726	19.123791	keep	use compact rolling-row DP state for path search
+12405ec	0.6094	185.931182	0.8193	133.136613	0.6726	19.804564	keep	re-establish baseline on current machine state
+wip	0.0000	0.00	0.0000	0.00	0.0000	120.00	discard	parallelize compact row DP across columns; mallat screening exceeded 120s
+wip	0.6094	171.801390	0.8193	129.469253	0.6726	23.528708	keep	elide explicit symmetric compact path mask during warping path search

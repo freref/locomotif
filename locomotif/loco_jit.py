@@ -771,7 +771,7 @@ def _build_path_no_warping(mask, i, j):
     return path
 
 @njit(cache=True)
-def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
+def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf, symmetric=False, diag_gap=0):
     length = 0
     lin = i * m + j
     buf_idx = len(buf) - 1
@@ -794,6 +794,8 @@ def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf):
             j -= 2
             lin -= m + 2
         else:
+            break
+        if symmetric and j < i + diag_gap:
             break
         if mask_flat[lin]:
             break
@@ -1003,8 +1005,11 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
     return paths
 
 @njit(cache=True)
-def find_best_paths_with_bp_compact(mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, candidate_linear_pos=None, candidate_values=None):
-    mask = mask | (bp_dir < 0)
+def find_best_paths_with_bp_compact(mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, candidate_linear_pos=None, candidate_values=None, symmetric=False, diag_gap=0):
+    if mask.size == 0:
+        mask = bp_dir < 0
+    else:
+        mask = mask | (bp_dir < 0)
     paths = []
     if candidate_linear_pos is None or candidate_values is None or len(candidate_linear_pos) == 0:
         return paths
@@ -1038,7 +1043,7 @@ def find_best_paths_with_bp_compact(mask, tau, l_min=10, vwidth=5, warping=True,
                 return paths
 
             if warping:
-                path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
+                path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf, symmetric, diag_gap)
                 buf_start = len(trace_buf) - path_len
                 use_buffer_path = True
                 first_i = trace_buf[buf_start, 0]

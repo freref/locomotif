@@ -30,6 +30,8 @@ The `--max-cases 100` baseline must be re-established before comparing experimen
 - Modify `locomotif/locomotif.py`, `locomotif/loco.py`, and `locomotif/loco_jit.py`.
 - Take inspiration from other branches, but do not rely on them blindly. Use them as references, and prefer finding your own simple, benchmark-backed improvements.
 - Change algorithms, data structures, pruning, path extraction, tau estimation, cumulative similarity computation, and approximation logic.
+- Focus on creative refactors that simplify the implementation, reduce the effective search space, or lower the underlying complexity of the method while keeping the spirit of LoCoMotif.
+- Prefer changes that remove machinery, collapse duplicated logic, or reorganize the search so less work needs to be done at all.
 - Rework any part of the algorithm if it improves the benchmark, as long as the result still maintains the spirit of the LoCoMotif algorithm.
 - Prefer language-agnostic optimizations: changes that would still make sense in another implementation language, not just Python- or Numba-specific tricks.
 - Prefer global optimizations that scale to larger time series and larger search spaces, rather than local tweaks that only help small benchmark cases.
@@ -51,6 +53,8 @@ The `--max-cases 100` baseline must be re-established before comparing experimen
 **Quality-first criterion**: When speed and quality move in opposite directions, quality usually comes first. Keep a change only if it improves the overall tradeoff. A speedup with a noticeable quality drop is usually not worth it. A small quality gain with similar runtime is worth it. Equal quality with a meaningful speedup is also worth it. Tiny quality regressions are acceptable if the speed gain is very large.
 
 **Simplicity criterion**: All else being equal, simpler is better. A speedup or quality improvement that removes complexity is especially valuable. Do not keep extra machinery unless the benchmark win is real.
+
+**Creative-refactor criterion**: Default to structural changes over micro-optimizations. Favor refactors that simplify control flow, reduce asymptotic work, improve pruning/search structure, or otherwise make the algorithm do less work. Avoid spending iterations on tiny local optimizations unless they clearly unlock or validate a larger structural improvement.
 
 **The first run**: Your very first run should always be to establish the baseline, so you will run the full benchmark script as is.
 
@@ -144,6 +148,6 @@ The idea is that you are an autonomous researcher trying one structural idea at 
 
 **Crashes**: If a run crashes due to a simple bug, fix it and re-run. If the idea itself is fundamentally broken, log `crash`, discard it, and move on.
 
-**Priority order for ideas**: The earlier `approx`-inspired directions above have already been tried in this run. Focus next on larger approximation, pruning, and data-structure changes that improve scaling. Prefer complexity-reducing ideas over language-specific micro-optimizations unless the micro-optimization unlocks a clear benchmark win.
+**Priority order for ideas**: The earlier `approx`-inspired directions above have already been tried in this run. Focus next on creative refactors, larger approximation changes, pruning/search redesigns, and data-structure simplifications that improve scaling. Prefer complexity-reducing ideas over small local optimizations. Only try a micro-optimization if it supports a broader structural direction or is needed to confirm a larger idea.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The loop runs until the human interrupts you.
