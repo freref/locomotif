@@ -40,12 +40,14 @@ def _materialize_path_from_graph(path_data, idx):
 
 @njit(cache=True)
 def _build_compact_path_graph(raw_paths, sm):
+    mirror_flags = np.zeros(len(raw_paths), dtype=np.bool_)
     total_paths = 0
     total_nodes = np.int64(0)
     total_cols = np.int64(0)
     total_cum = np.int64(0)
 
-    for raw_path in raw_paths:
+    for raw_idx in range(len(raw_paths)):
+        raw_path = raw_paths[raw_idx]
         path_len = len(raw_path)
         total_paths += 1
         total_nodes += path_len
@@ -57,7 +59,8 @@ def _build_compact_path_graph(raw_paths, sm):
             if raw_path[k, 0] != raw_path[k, 1]:
                 is_diagonal = False
                 break
-        if not is_diagonal:
+        mirror_flags[raw_idx] = not is_diagonal
+        if mirror_flags[raw_idx]:
             total_paths += 1
             total_nodes += path_len
             total_cols += raw_path[path_len - 1, 0] - raw_path[0, 0] + 1
@@ -78,7 +81,8 @@ def _build_compact_path_graph(raw_paths, sm):
     col_cursor = np.int64(0)
     cum_cursor = np.int64(0)
 
-    for raw_path in raw_paths:
+    for raw_idx in range(len(raw_paths)):
+        raw_path = raw_paths[raw_idx]
         path_idx, node_cursor, col_cursor, cum_cursor = _append_compact_path(
             raw_path,
             sm,
@@ -98,12 +102,7 @@ def _build_compact_path_graph(raw_paths, sm):
             path_jl,
         )
 
-        is_diagonal = True
-        for k in range(len(raw_path)):
-            if raw_path[k, 0] != raw_path[k, 1]:
-                is_diagonal = False
-                break
-        if not is_diagonal:
+        if mirror_flags[raw_idx]:
             path_idx, node_cursor, col_cursor, cum_cursor = _append_compact_path(
                 raw_path,
                 sm,

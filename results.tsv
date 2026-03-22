@@ -16,3 +16,9 @@ wip	0.0000	0.00	0.8193	183.675047	0.6726	39.777443	discard	use row-vectorized si
 wip	0.5972	204.327881	0.8193	158.423500	0.6726	27.179457	discard	honor caller-provided vwidth in LoCoMotif path search
 6cb022f	0.6094	197.322326	0.8193	153.441671	0.6726	22.985084	keep	fuse tiled seed collection into the CSM backpointer pass
 wip	0.0000	0.00	0.8202	159.968931	0.6726	33.421911	discard	keep two fused seed endpoints per tile instead of one
+wip	0.0000	0.00	0.8180	158.883326	0.6757	34.469831	discard	densify large-matrix tau sample and interpolate quantile
+wip	0.0000	0.00	0.8193	158.324466	0.6726	33.629864	discard	interpolate sampled tau quantile on large matrices
+wip	0.0000	0.00	0.8193	155.628449	0.6726	29.332012	discard	factor graph induced-path bounds into a tighter helper
+wip	0.0000	0.00	0.8193	152.243744	0.6726	30.201201	discard	collapse csm dispatch branches and unpack graph tuples explicitly
+wip	0.6094	198.321341	0.8193	154.231175	0.6726	27.942272	discard	normalize path contiguity upstream in LoCo.find_best_paths
+wip	0.6094	193.824441	0.8193	149.127733	0.6726	26.641406	keep	cache mirrored-path requirement during graph sizing
