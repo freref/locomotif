@@ -15,3 +15,4 @@ wip	0.0000	0.00	0.8195	175.037648	0.6731	47.607077	discard	prune candidate endpo
 wip	0.0000	0.00	0.8193	183.675047	0.6726	39.777443	discard	use row-vectorized similarity matrix kernel
 wip	0.5972	204.327881	0.8193	158.423500	0.6726	27.179457	discard	honor caller-provided vwidth in LoCoMotif path search
 6cb022f	0.6094	197.322326	0.8193	153.441671	0.6726	22.985084	keep	fuse tiled seed collection into the CSM backpointer pass
+wip	0.0000	0.00	0.8202	159.968931	0.6726	33.421911	discard	keep two fused seed endpoints per tile instead of one
