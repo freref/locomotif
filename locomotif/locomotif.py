@@ -373,25 +373,7 @@ def _induced_paths(b, e, mask, P):
 
 @njit(cache=True)
 def _induced_paths_graph(b, e, mask, path_starts, col_offsets, cum_offsets, node_rows, node_cols, index_j, cumulative, path_j1, path_jl):
-    count = 0
-    for path_idx in range(len(path_j1)):
-        if b < path_j1[path_idx] or path_jl[path_idx] < e:
-            continue
-        col_base = col_offsets[path_idx]
-        node_base = path_starts[path_idx]
-        kb = index_j[col_base + np.int64(b - path_j1[path_idx])]
-        ke = index_j[col_base + np.int64(e - 1 - path_j1[path_idx])]
-        b_m = node_rows[node_base + np.int64(kb)]
-        e_m = node_rows[node_base + np.int64(ke)] + 1
-        blocked = False
-        for pos in range(b_m, e_m):
-            if mask[pos]:
-                blocked = True
-                break
-        if not blocked:
-            count += 1
-
-    out = np.empty((count, 2), dtype=np.int32)
+    out = np.empty((len(path_j1), 2), dtype=np.int32)
     write_idx = 0
     for path_idx in range(len(path_j1)):
         if b < path_j1[path_idx] or path_jl[path_idx] < e:
@@ -411,7 +393,7 @@ def _induced_paths_graph(b, e, mask, path_starts, col_offsets, cum_offsets, node
             out[write_idx, 0] = b_m
             out[write_idx, 1] = e_m
             write_idx += 1
-    return out
+    return out[:write_idx]
 
 from numba.experimental import jitclass
 @jitclass([
