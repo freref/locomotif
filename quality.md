@@ -28,29 +28,34 @@ The `--max-cases 100` baseline must be re-established before comparing experimen
 
 **What you CAN do:**
 - Modify `locomotif/locomotif.py`, `locomotif/loco.py`, and `locomotif/loco_jit.py`.
-- Take inspiration from other branches, but do not rely on them blindly. Use them as references, and prefer finding your own simple, benchmark-backed improvements.
-- Change algorithms, data structures, pruning, path extraction, tau estimation, cumulative similarity computation, and approximation logic.
-- Rework any part of the algorithm if it improves the benchmark, as long as the result still maintains the spirit of the LoCoMotif algorithm.
-- Prefer language-agnostic optimizations: changes that would still make sense in another implementation language, not just Python- or Numba-specific tricks.
-- Prefer global optimizations that scale to larger time series and larger search spaces, rather than local tweaks that only help small benchmark cases.
+- Use `main` as the style and structure reference when deciding how code should look after cleanup. Prefer changes that reduce drift from `main` and make the branch easier to audit.
+- Simplify algorithms, control flow, data flow, and helper structure when the resulting behavior is clearer and benchmark quality is preserved or improved.
+- Remove redundant branches, duplicated logic, unnecessary state, and incidental complexity.
+- Tighten motif quality, path quality, pruning correctness, tau estimation, and approximation behavior when the changes remain faithful to the broad LoCoMotif semantics.
+- Keep runtime at least as good as baseline while simplifying the code. Runtime may stay the same or improve, but it must not get worse.
 
 **What you CANNOT do:**
 - Modify the profiling harness in `/Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling`.
 - Hardcode per-dataset behavior or tune special-case hyperparameters for individual datasets.
 - Disable warping support.
 - Replace LoCoMotif with a fundamentally different method that no longer matches the broad semantics of the original algorithm.
+- Add complexity whose main purpose is squeezing out runtime at the expense of clarity or auditability.
 
 **Algorithmic reference**: The implementation may change substantially, but it should still preserve the broad LoCoMotif semantics from the paper at `/Users/fre/Documents/University/2025-2026/thesis/papers/LoCoMotif_discovering_time-warped_motifs_in_time_s.pdf`. Use that paper as the reference for what must remain true at a high level, rather than trying to preserve exact code behavior.
 
-**Do not preserve exact paths for their own sake**: The discovered paths, motif sets, and internal behavior do not need to stay identical to the current implementation. Optimize for benchmark quality and runtime, while keeping the broad LoCoMotif semantics.
+**Auditability criterion**: Prefer code that looks like it could plausibly live on `main`. Favor direct data flow, fewer moving parts, obvious invariants, and changes that are easy to review in a diff against `main`.
+
+**Do not preserve exact paths for their own sake**: The discovered paths, motif sets, and internal behavior do not need to stay identical to the current implementation. Optimize for motif quality, correctness, and simpler structure, while keeping the broad LoCoMotif semantics.
 
 **Large-series safety**: Assume future runs may use very large time series. Avoid changes that risk integer overflow, indexing overflow, or size-dependent corruption on much larger inputs.
 
-**The goal is simple: improve speed and quality together on the full `--max-cases 100` benchmark, with a concrete target of getting `uv run python compact_profiling_all_quality.py --max-cases 100` under 100 seconds.** Favor global strategies that make sense across datasets, time-series lengths, and much larger future inputs. Prefer changes that improve the underlying complexity, pruning power, or search structure.
+**The goal is simple: improve motif quality, or preserve it while clearly simplifying the code, and never accept a runtime increase on the full `--max-cases 100` benchmark.** Favor structural cleanups that make the implementation easier to audit and maintain, but only keep them when runtime does not increase.
 
-**Quality-first criterion**: When speed and quality move in opposite directions, quality usually comes first. Keep a change only if it improves the overall tradeoff. A speedup with a noticeable quality drop is usually not worth it. A small quality gain with similar runtime is worth it. Equal quality with a meaningful speedup is also worth it. Tiny quality regressions are acceptable if the speed gain is very large.
+**Quality-and-simplicity criterion**: Keep a change only if average quality improves, or if average quality is unchanged and the code is meaningfully simpler, clearer, or closer to `main`. If quality drops, discard it. If quality is unchanged but the code is not clearly simpler, discard it.
 
-**Simplicity criterion**: All else being equal, simpler is better. A speedup or quality improvement that removes complexity is especially valuable. Do not keep extra machinery unless the benchmark win is real.
+**Simplicity criterion**: All else being equal, simpler is better. Prefer deleting machinery over adding it. An unchanged-quality change is only valuable when the simplification is obvious in the diff and reduces real complexity.
+
+**Runtime rule**: Runtime is a hard gate, not a soft guideline. Do not keep any change whose full-run runtime is higher than baseline. Equal runtime is acceptable. Lower runtime is better.
 
 **The first run**: Your very first run should always be to establish the baseline, so you will run the full benchmark script as is.
 
@@ -103,9 +108,9 @@ Example:
 ```
 commit	avg_quality	total_seconds	cricket100_quality	cricket100_seconds	mallat100_quality	mallat100_seconds	status	description
 a1b2c3d	0.6174	194.17	0.8136	138.14	0.7546	31.03	keep	baseline
-b2c3d4e	0.6210	186.50	0.8200	129.00	0.7600	28.80	keep	use smarter tau estimate
-c3d4e5f	0.6120	175.10	0.7900	120.00	0.7400	26.00	discard	aggressive endpoint pruning
-d4e5f6g	0.0000	0.00	0.0000	0.00	0.0000	0.00	crash	broken sparse backtracking
+b2c3d4e	0.6210	186.50	0.8200	129.00	0.7600	28.80	keep	simplify tau estimate while preserving output quality
+c3d4e5f	0.6120	175.10	0.7900	120.00	0.7400	26.00	discard	remove pruning branch but quality regressed
+d4e5f6g	0.0000	0.00	0.0000	0.00	0.0000	0.00	crash	broken cleanup of path bookkeeping
 ```
 
 ## The experiment loop
@@ -115,35 +120,35 @@ The experiment runs on a dedicated branch (e.g. `autoresearch/mar21`).
 LOOP FOREVER:
 
 1. Look at the git state: the current branch/commit we're on.
-2. Tune the approximation code with one experimental idea by directly hacking the code.
-3. Run the screening benchmarks:
+2. Pick one cleanup or quality idea that should make the code simpler, clearer, or closer to `main` while preserving or improving benchmark quality.
+3. Tune the approximation code with that one idea by directly hacking the code.
+4. Run the screening benchmarks:
    - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark cricket --max-cases 100 > run_cricket.log 2>&1`
    - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --benchmark mallat --max-cases 100 > run_mallat.log 2>&1`
-4. Read out the screening results:
+5. Read out the screening results:
    - `grep "^average_quality_score=\|^total_seconds=" run_cricket.log`
    - `grep "^average_quality_score=\|^total_seconds=" run_mallat.log`
-5. If either screening run crashes, run `tail -n 50` on the corresponding log, decide whether the issue is fixable, and either retry or discard.
-6. If the screening tradeoff is clearly bad, discard immediately and revert to where you started.
-7. If screening looks promising, run the promotion benchmark:
+6. If either screening run crashes, run `tail -n 50` on the corresponding log, decide whether the issue is fixable, and either retry or discard.
+7. If screening shows any quality loss, or any runtime increase without a clear path to meeting the final keep rule, discard immediately and revert to where you started.
+8. If screening looks promising, run the promotion benchmark:
    - `cd /Users/fre/Documents/University/2025-2026/thesis/code/locomotif-profiling && uv run python compact_profiling_all_quality.py --max-cases 100 > run.log 2>&1`
-8. Read out the promotion results:
+9. Read out the promotion results:
    - `grep "^average_quality_score=\|^total_seconds=" run.log`
-9. Record the results in the TSV.
-10. Promotion rule:
-   - If full-run average quality improves and runtime does not meaningfully worsen, keep.
-   - If full-run average quality is effectively unchanged and runtime clearly improves, keep.
-   - If full-run average quality improves and runtime also improves, keep.
-   - If full-run average quality regresses only slightly, but the speed gain is very large, keep.
+10. Record the results in the TSV.
+11. Promotion rule:
+   - Keep if full-run average quality improves and runtime is less than or equal to baseline.
+   - Keep if full-run average quality is unchanged, runtime is less than or equal to baseline, and the code is materially simpler or closer to `main`.
+   - If full-run average quality improves and the code also becomes simpler, keep.
    - Otherwise discard.
-11. If the change is kept, git commit it and advance the branch.
-12. If the change is discarded, revert only the edited files back to the starting point.
+12. If the change is kept, git commit it and advance the branch.
+13. If the change is discarded, revert only the edited files back to the starting point.
 
-The idea is that you are an autonomous researcher trying one structural idea at a time. If it works, keep it. If it does not, throw it away and continue.
+The idea is that you are an autonomous researcher trying one structural idea at a time. Keep a change only when quality goes up, or when quality stays the same and simplicity clearly goes up, and only when runtime does not increase. If it does not meet all of those conditions, throw it away and continue.
 
 **Timeout**: The full `--max-cases 100` benchmark can take several minutes. If a run exceeds 15 minutes, kill it and treat it as a failure.
 
 **Crashes**: If a run crashes due to a simple bug, fix it and re-run. If the idea itself is fundamentally broken, log `crash`, discard it, and move on.
 
-**Priority order for ideas**: The earlier `approx`-inspired directions above have already been tried in this run. Focus next on larger approximation, pruning, and data-structure changes that improve scaling. Prefer complexity-reducing ideas over language-specific micro-optimizations unless the micro-optimization unlocks a clear benchmark win.
+**Priority order for ideas**: Focus on changes that remove special cases, reduce duplication, clarify invariants, simplify path extraction and pruning logic, and align the branch with `main`-style structure. Prefer structural cleanups and quality improvements over runtime-driven tricks.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The loop runs until the human interrupts you.
