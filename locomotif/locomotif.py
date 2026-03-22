@@ -242,7 +242,6 @@ class LoCoMotif:
         self.l_max = np.int32(l_max)
         # LoCo instance
         self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, warping=warping)
-        self._paths = None
         self._path_data = None
         self._path_collection = None
 
@@ -261,20 +260,17 @@ class LoCoMotif:
         raw_paths = [np.ascontiguousarray(path, dtype=np.int32) for path in raw_paths]
         self._path_data = _build_compact_path_graph(raw_paths, self.self_similarity_matrix)
         self._path_collection = _LazyPathCollection(self._path_data)
-        self._paths = None
         return self._path_collection
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
             mask = np.full(len(self.ts), False)
-        if self._path_data is not None:
-            induced = _induced_paths_graph(b, e, mask, *self._path_data[:9])
-            return [(int(segment[0]), int(segment[1])) for segment in induced]
-        return _induced_paths(b, e, mask, self._paths)
+        induced = _induced_paths_graph(b, e, mask, *self._path_data[:9])
+        return [(int(segment[0]), int(segment[1])) for segment in induced]
 
     # iteratively finds the best motif set
     def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
-        if self._paths is None and self._path_data is None:
+        if self._path_data is None:
             self.find_best_paths()
             
         n = len(self.ts)
@@ -299,32 +295,18 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
 
-            if self._path_data is not None:
-                (b, e), best_fitness, fitnesses = _find_best_candidate_graph(
-                    n,
-                    self.l_min,
-                    self.l_max,
-                    overlap,
-                    mask,
-                    mask,
-                    start_mask,
-                    end_mask,
-                    *self._path_data,
-                    keep_fitnesses=keep_fitnesses,
-                )
-            else:
-                (b, e), best_fitness, fitnesses = _find_best_candidate(
-                    self._paths,
-                    n,
-                    self.l_min,
-                    self.l_max,
-                    overlap,
-                    mask,
-                    mask,
-                    start_mask,
-                    end_mask,
-                    keep_fitnesses=keep_fitnesses,
-                )
+            (b, e), best_fitness, fitnesses = _find_best_candidate_graph(
+                n,
+                self.l_min,
+                self.l_max,
+                overlap,
+                mask,
+                mask,
+                start_mask,
+                end_mask,
+                *self._path_data,
+                keep_fitnesses=keep_fitnesses,
+            )
 
             if best_fitness == 0.0:
                 break
@@ -337,9 +319,7 @@ class LoCoMotif:
             
     @property
     def local_warping_paths(self):
-        if self._path_collection is not None:
-            return self._path_collection
-        return self._paths
+        return self._path_collection
     
     @property
     def self_similarity_matrix(self):
