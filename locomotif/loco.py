@@ -20,9 +20,9 @@ class LoCo:
                      
         # LoCo args
         self.warping = warping
-        self.tau = tau
-        self.delta_a = delta_a
-        self.delta_m = delta_m
+        self.tau = np.float32(tau)
+        self.delta_a = np.float32(delta_a)
+        self.delta_m = np.float32(delta_m)
         # Self-similarity matrix
         self._sm = None
         # Cumulative similiarity matrix
@@ -57,6 +57,7 @@ class LoCo:
         threshold = np.float32(0.0 if candidate_threshold is None else candidate_threshold)
         tile_size = np.int32(tile_size)
         diag_gap = np.int32(diag_gap)
+        diag_offset = np.int32(diag_offset)
         if self.warping:
             self._csm, self._bp_dir, self._candidate_linear_pos = loco_jit.cumulative_similarity_matrix_warping_with_bp(
                 self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
@@ -72,17 +73,19 @@ class LoCo:
             l_min = min(len(self.ts), len(self.ts2)) // 10
         if vwidth is None:
             vwidth = l_min // 2
+        l_min = np.int32(l_min)
+        vwidth = np.int32(vwidth)
 
         if self._csm is None:
-            diag_offset = 0
+            diag_offset = np.int32(0)
             if self._symmetric:
-                diag_offset = -max(1, (vwidth + 1) // 2)
-            min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
+                diag_offset = np.int32(-max(1, (int(vwidth) + 1) // 2))
+            min_path_length = l_min if not self.warping else np.int32(max(1, (int(l_min) + 1) // 2))
             self.calculate_cumulative_similarity_matrix(
                 diag_offset=diag_offset,
                 candidate_threshold=self.tau * min_path_length,
                 tile_size=vwidth,
-                diag_gap=vwidth + 1 if self._symmetric else 0,
+                diag_gap=np.int32(vwidth + 1) if self._symmetric else np.int32(0),
             )
 
         if self._symmetric:
@@ -110,9 +113,9 @@ class LoCo:
         # Get the SM, determine tau and delta's
         sm = loco.calculate_similarity_matrix()
         tau = estimate_tau_from_sm(sm, rho, only_triu=loco._symmetric)
-        loco.tau = tau
-        loco.delta_a = 2 * tau
-        loco.delta_m = 0.5
+        loco.tau = np.float32(tau)
+        loco.delta_a = np.float32(2.0) * loco.tau
+        loco.delta_m = np.float32(0.5)
         return loco
     
 # Calculate the similarity threshold tau as the rho-quantile of the similarity matrix.

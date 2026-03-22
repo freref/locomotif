@@ -22,3 +22,8 @@ wip	0.0000	0.00	0.8193	155.628449	0.6726	29.332012	discard	factor graph induced-
 wip	0.0000	0.00	0.8193	152.243744	0.6726	30.201201	discard	collapse csm dispatch branches and unpack graph tuples explicitly
 wip	0.6094	198.321341	0.8193	154.231175	0.6726	27.942272	discard	normalize path contiguity upstream in LoCo.find_best_paths
 ae24f4d	0.6094	193.824441	0.8193	149.127733	0.6726	26.641406	keep	cache mirrored-path requirement during graph sizing
+13203b2	0.6094	188.915459	0.8193	137.527919	0.6726	24.219902	keep	re-establish baseline on current branch head
+wip	0.0000	0.00	0.8193	139.646087	0.0000	0.00	discard	reuse graph candidate endpoint buffers across representatives
+wip	0.0000	0.00	0.8193	144.805835	0.0000	0.00	discard	remove redundant zero clamps in cumulative similarity kernels
+wip	0.0000	0.00	0.8193	147.023851	0.0000	0.00	discard	make only the synthetic diagonal contiguous before graph packing
+13203b2	0.6094	182.867237	0.8193	135.133365	0.6726	21.953003	keep	store LoCo kernel thresholds and lengths in float32/int32 form
