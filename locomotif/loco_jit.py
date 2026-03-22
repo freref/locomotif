@@ -795,6 +795,8 @@ def _extract_path_to_buffer(mask_flat, bp_flat, m, i, j, buf, symmetric=False, d
             lin -= m + 2
         else:
             break
+        if bp_flat[lin] < 0:
+            break
         if symmetric and j < i + diag_gap:
             break
         if mask_flat[lin]:
@@ -1006,7 +1008,10 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
 
 @njit(cache=True)
 def find_best_paths_with_bp_compact(mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, candidate_linear_pos=None, candidate_values=None, symmetric=False, diag_gap=0):
-    if mask.size == 0:
+    if warping:
+        if mask.size == 0:
+            mask = np.zeros(bp_dir.shape, dtype=np.bool_)
+    elif mask.size == 0:
         mask = bp_dir < 0
     else:
         mask = mask | (bp_dir < 0)

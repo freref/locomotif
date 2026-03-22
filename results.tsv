@@ -18,6 +18,10 @@ wip	0.0000	0.00	0.8193	183.675047	0.6726	39.777443	discard	use row-vectorized si
 wip	0.5972	204.327881	0.8193	158.423500	0.6726	27.179457	discard	honor caller-provided vwidth in LoCoMotif path search
 6cb022f	0.6094	197.322326	0.8193	153.441671	0.6726	22.985084	keep	fuse tiled seed collection into the CSM backpointer pass
 wip	0.0000	0.00	0.8202	159.968931	0.6726	33.421911	discard	keep two fused seed endpoints per tile instead of one
+a27b456	0.6094	171.804386	0.8193	124.933294	0.6726	19.972363	keep	baseline
+wip	0.0000	0.00	0.0000	0.00	0.6726	21.412974	discard	reuse per-b candidate scratch arrays; mallat runtime regressed at screening
+wip	0.0000	0.00	0.0000	0.00	0.6726	23.641071	discard	reset compact DP rows from the active band only; mallat runtime regressed at screening
+wip	0.6094	169.948108	0.8193	124.424076	0.6726	20.960395	keep	use bp reachability directly in compact warping path search
 wip	0.0000	0.00	0.8180	158.883326	0.6757	34.469831	discard	densify large-matrix tau sample and interpolate quantile
 wip	0.0000	0.00	0.8193	158.324466	0.6726	33.629864	discard	interpolate sampled tau quantile on large matrices
 wip	0.0000	0.00	0.8193	155.628449	0.6726	29.332012	discard	factor graph induced-path bounds into a tighter helper
