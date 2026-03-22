@@ -245,6 +245,24 @@ def _finalize_tiled_candidates(tile_best_linear):
     return out
 
 @njit(cache=True)
+def _finalize_tiled_candidates_with_values(tile_best_linear, tile_best_value):
+    count = 0
+    for idx in range(len(tile_best_linear)):
+        if tile_best_linear[idx] >= 0:
+            count += 1
+
+    out_linear = np.empty(count, dtype=np.int64)
+    out_value = np.empty(count, dtype=np.float32)
+    write_idx = 0
+    for idx in range(len(tile_best_linear)):
+        linear_idx = tile_best_linear[idx]
+        if linear_idx >= 0:
+            out_linear[write_idx] = linear_idx
+            out_value[write_idx] = tile_best_value[idx]
+            write_idx += 1
+    return out_linear, out_value
+
+@njit(cache=True)
 def symmetric_path_mask(n, m, vwidth):
     mask = np.ones((n, m), dtype=np.bool_)
     offset = vwidth + 1
@@ -530,6 +548,116 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
                         tile_best_value[tile_idx] = csm[ci, cj]
 
     return csm, bp_dir, _finalize_tiled_candidates(tile_best_linear)
+
+@njit(cache=True)
+def cumulative_similarity_matrix_warping_with_bp_compact(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, tile_size=0, candidate_threshold=0.0, diag_gap=0):
+    n, m = sm.shape
+
+    bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    row_prev2 = np.zeros(m + 2, dtype=np.float32)
+    row_prev1 = np.zeros(m + 2, dtype=np.float32)
+    row_curr = np.zeros(m + 2, dtype=np.float32)
+    if tile_size > 0:
+        n_tiles_i = (n + 2 + tile_size - 1) // tile_size
+        n_tiles_j = (m + 2 + tile_size - 1) // tile_size
+        tile_best_linear = np.full(n_tiles_i * n_tiles_j, np.int64(-1), dtype=np.int64)
+        tile_best_value = np.zeros(n_tiles_i * n_tiles_j, dtype=np.float32)
+    else:
+        n_tiles_j = 0
+        tile_best_linear = np.empty(0, dtype=np.int64)
+        tile_best_value = np.empty(0, dtype=np.float32)
+    zero_cutoff = np.float32(delta_a / delta_m)
+
+    for i in range(n):
+        row_curr[:] = 0.0
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        for j in range(j_start, m):
+            ci = i + 2
+            cj = j + 2
+            sim = sm[i, j]
+            max_cs, direction = _best_predecessor(
+                row_prev1[cj - 1],
+                row_prev2[cj - 1],
+                row_prev1[cj - 2],
+            )
+
+            value = np.float32(0.0)
+            if sim < tau:
+                if max_cs <= zero_cutoff:
+                    continue
+                value = np.float32(delta_m * max_cs - delta_a)
+            else:
+                value = np.float32(sim + max_cs)
+
+            if value <= 0.0:
+                continue
+
+            row_curr[cj] = value
+            bp_dir[ci, cj] = direction
+            if tile_size > 0 and value >= candidate_threshold and (not only_triu or cj >= ci + diag_gap):
+                tile_idx = (ci // tile_size) * n_tiles_j + (cj // tile_size)
+                if tile_best_linear[tile_idx] == -1 or value > tile_best_value[tile_idx]:
+                    tile_best_linear[tile_idx] = np.int64(ci) * np.int64(m + 2) + np.int64(cj)
+                    tile_best_value[tile_idx] = value
+
+        tmp = row_prev2
+        row_prev2 = row_prev1
+        row_prev1 = row_curr
+        row_curr = tmp
+
+    return bp_dir, *_finalize_tiled_candidates_with_values(tile_best_linear, tile_best_value)
+
+@njit(cache=True)
+def cumulative_similarity_matrix_no_warping_with_bp_compact(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, tile_size=0, candidate_threshold=0.0, diag_gap=0):
+    n, m = sm.shape
+
+    bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    row_prev1 = np.zeros(m + 2, dtype=np.float32)
+    row_curr = np.zeros(m + 2, dtype=np.float32)
+    if tile_size > 0:
+        n_tiles_i = (n + 2 + tile_size - 1) // tile_size
+        n_tiles_j = (m + 2 + tile_size - 1) // tile_size
+        tile_best_linear = np.full(n_tiles_i * n_tiles_j, np.int64(-1), dtype=np.int64)
+        tile_best_value = np.zeros(n_tiles_i * n_tiles_j, dtype=np.float32)
+    else:
+        n_tiles_j = 0
+        tile_best_linear = np.empty(0, dtype=np.int64)
+        tile_best_value = np.empty(0, dtype=np.float32)
+    zero_cutoff = np.float32(delta_a / delta_m)
+
+    for i in range(n):
+        row_curr[:] = 0.0
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        for j in range(j_start, m):
+            ci = i + 2
+            cj = j + 2
+            sim = sm[i, j]
+            value = np.float32(0.0)
+
+            if sim < tau:
+                prev = row_prev1[cj - 1]
+                if prev <= zero_cutoff:
+                    continue
+                value = np.float32(delta_m * prev - delta_a)
+            else:
+                value = np.float32(sim + row_prev1[cj - 1])
+
+            if value <= 0.0:
+                continue
+
+            row_curr[cj] = value
+            bp_dir[ci, cj] = np.int8(0)
+            if tile_size > 0 and value >= candidate_threshold and (not only_triu or cj >= ci + diag_gap):
+                tile_idx = (ci // tile_size) * n_tiles_j + (cj // tile_size)
+                if tile_best_linear[tile_idx] == -1 or value > tile_best_value[tile_idx]:
+                    tile_best_linear[tile_idx] = np.int64(ci) * np.int64(m + 2) + np.int64(cj)
+                    tile_best_value[tile_idx] = value
+
+        tmp = row_prev1
+        row_prev1 = row_curr
+        row_curr = tmp
+
+    return bp_dir, *_finalize_tiled_candidates_with_values(tile_best_linear, tile_best_value)
 
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
@@ -854,6 +982,70 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
                 path = _build_path_warping(bp_dir, mask, i_best, j_best)
                 mask = mask_vicinity(path, mask, 0)
                 long_enough = (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min
+            else:
+                path = _build_path_no_warping(mask, i_best, j_best)
+                mask = mask_vicinity(path, mask, 0)
+                long_enough = (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min
+
+            if long_enough:
+                path_found = True
+            elif use_buffer_path:
+                _mask_buffer_path_zero(mask_flat, m, trace_buf, buf_start)
+                use_buffer_path = False
+
+        if use_buffer_path:
+            _mask_buffer_vicinity(trace_buf, buf_start, mask, vwidth)
+            path = trace_buf[buf_start:].copy()
+        else:
+            mask = mask_vicinity(path, mask, vwidth)
+        paths.append(path)
+
+    return paths
+
+@njit(cache=True)
+def find_best_paths_with_bp_compact(mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, candidate_linear_pos=None, candidate_values=None):
+    mask = mask | (bp_dir < 0)
+    paths = []
+    if candidate_linear_pos is None or candidate_values is None or len(candidate_linear_pos) == 0:
+        return paths
+
+    keys = candidate_values.view(np.uint32).copy()
+    _, linear_pos = radix_sort_u32_with_payload(keys, candidate_linear_pos.copy())
+
+    n, m = bp_dir.shape
+    k_best = len(linear_pos) - 1
+    mask_flat = mask.reshape(n * m)
+    bp_flat = bp_dir.reshape(n * m)
+    trace_buf = np.empty((n + m, 2), dtype=np.int32)
+
+    while k_best >= 0:
+        path = np.empty((0, 0), dtype=np.int32)
+        path_found = False
+        use_buffer_path = False
+
+        while not path_found:
+            while mask_flat[linear_pos[k_best]]:
+                k_best -= 1
+                if k_best < 0:
+                    return paths
+
+            linear_idx = linear_pos[k_best]
+            k_best -= 1
+            i_best = np.int32(linear_idx // np.int64(m))
+            j_best = np.int32(linear_idx - np.int64(i_best) * np.int64(m))
+
+            if i_best < 2 or j_best < 2:
+                return paths
+
+            if warping:
+                path_len = _extract_path_to_buffer(mask_flat, bp_flat, m, i_best, j_best, trace_buf)
+                buf_start = len(trace_buf) - path_len
+                use_buffer_path = True
+                first_i = trace_buf[buf_start, 0]
+                first_j = trace_buf[buf_start, 1]
+                last_i = trace_buf[len(trace_buf) - 1, 0]
+                last_j = trace_buf[len(trace_buf) - 1, 1]
+                long_enough = (last_i - first_i + 1) >= l_min or (last_j - first_j + 1) >= l_min
             else:
                 path = _build_path_no_warping(mask, i_best, j_best)
                 mask = mask_vicinity(path, mask, 0)
