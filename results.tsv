@@ -7,4 +7,11 @@ wip	0.0000	0.00	0.8193	170.799797	0.6726	42.296695	discard	collect tiled candida
 wip	0.0000	0.00	0.8170	176.145928	0.6726	43.983175	discard	suppress retries near path endpoints
 wip	0.0000	0.00	0.8193	170.591161	0.6726	42.219184	discard	use row-local indexing in CSM kernels
 wip	0.0000	0.00	0.8193	172.256069	0.6726	44.391559	discard	enable bounded block-pruned cumulative similarity
-WIPCOMMIT	0.6086	208.897537	0.8193	157.667645	0.6726	36.196603	keep	use symmetric thresholded candidate collection
+d76be0c	0.6086	208.897537	0.8193	157.667645	0.6726	36.196603	keep	use symmetric thresholded candidate collection
+wip	0.0000	0.00	0.8193	161.449753	0.6726	39.173190	discard	start symmetric tile scan at first feasible tile
+wip	0.6066	202.345426	0.8193	153.696862	0.6726	38.046660	discard	skip symmetric CSM cells inside masked diagonal band
+wip	0.6064	205.167110	0.8200	157.558829	0.6727	27.495583	discard	exclude symmetric tau band while preserving diagonal path
+wip	0.0000	0.00	0.8195	175.037648	0.6731	47.607077	discard	prune candidate endpoints by backpointer path length
+wip	0.0000	0.00	0.8193	183.675047	0.6726	39.777443	discard	use row-vectorized similarity matrix kernel
+wip	0.5972	204.327881	0.8193	158.423500	0.6726	27.179457	discard	honor caller-provided vwidth in LoCoMotif path search
+6cb022f	0.6094	197.322326	0.8193	153.441671	0.6726	22.985084	keep	fuse tiled seed collection into the CSM backpointer pass
