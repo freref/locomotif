@@ -1,4 +1,6 @@
 commit	avg_quality	total_seconds	cricket100_quality	cricket100_seconds	mallat100_quality	mallat100_seconds	status	description
+df182de	0.6094	178.643165	0.8193	130.823563	0.6726	21.799475	keep	baseline
+wip	0.0000	0.00	0.0000	0.00	0.6726	27.654879	discard	collapse duplicate candidate masks; mallat runtime regressed at screening
 2f38117	0.6086	282.131303	0.8193	200.814070	0.6726	47.236650	keep	baseline
 wip	0.0000	0.00	0.8419	211.865299	0.6746	55.836590	discard	use 2x path seed tiles on large matrices
 3c5c675	0.6086	250.632533	0.8193	186.189514	0.6726	46.591525	keep	skip zero-valued penalized CSM cells
@@ -27,3 +29,8 @@ wip	0.0000	0.00	0.8193	139.646087	0.0000	0.00	discard	reuse graph candidate endp
 wip	0.0000	0.00	0.8193	144.805835	0.0000	0.00	discard	remove redundant zero clamps in cumulative similarity kernels
 wip	0.0000	0.00	0.8193	147.023851	0.0000	0.00	discard	make only the synthetic diagonal contiguous before graph packing
 13203b2	0.6094	182.867237	0.8193	135.133365	0.6726	21.953003	keep	store LoCo kernel thresholds and lengths in float32/int32 form
+wip	0.0000	0.00	0.8193	142.264168	0.6726	26.421500	discard	reuse graph candidate scratch buffers across representatives
+wip	0.6094	193.853797	0.8193	140.056593	0.6726	25.143145	discard	remove redundant max clamps in cumulative similarity kernels
+wip	0.6094	191.448245	0.8193	142.070640	0.6726	26.163565	discard	remove LoCoMotif path-object fallback branches from main flow
+df182de	0.6094	192.081046	0.8193	138.812267	0.6726	22.806163	keep	re-establish baseline on warmed machine state
+6b3d6d0	0.6094	191.288448	0.8193	145.345371	0.6726	27.658971	keep	remove LoCoMotif path-object fallback branches from main flow

@@ -55,6 +55,8 @@ The `--max-cases 100` baseline must be re-established before comparing experimen
 
 **Simplicity criterion**: All else being equal, simpler is better. Prefer deleting machinery over adding it. An unchanged-quality change is only valuable when the simplification is obvious in the diff and reduces real complexity.
 
+**Lines-of-code preference**: All else being equal, fewer lines of code is better when it reflects a real simplification. Prefer changes with more removals than additions when that stays clear, auditable, and faithful to the benchmark and quality rules above, but treat this as a preference rather than a hard rule.
+
 **Runtime rule**: Runtime is a hard gate, not a soft guideline. Do not keep any change whose full-run runtime is higher than baseline. Equal runtime is acceptable. Lower runtime is better.
 
 **The first run**: Your very first run should always be to establish the baseline, so you will run the full benchmark script as is.

@@ -6,7 +6,6 @@ from .path import Path
 import numba
 from numba import int32, float32, boolean
 from numba import njit
-from numba.typed import List
 
 class _LazyPathCollection:
 
