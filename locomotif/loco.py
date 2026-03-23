@@ -20,13 +20,17 @@ class LoCo:
                      
         # LoCo args
         self.warping = warping
-        self.tau = tau
-        self.delta_a = delta_a
-        self.delta_m = delta_m
+        self.tau = np.float32(tau)
+        self.delta_a = np.float32(delta_a)
+        self.delta_m = np.float32(delta_m)
         # Self-similarity matrix
         self._sm = None
         # Cumulative similiarity matrix
         self._csm = None
+        self._bp_dir = None
+        self._candidate_linear_pos = None
+        self._candidate_values = None
+        self._last_csm_diag_offset = np.int32(0)
         # Local warping paths
         self._paths = None
 
@@ -37,6 +41,8 @@ class LoCo:
 
     @property
     def cumulative_similarity_matrix(self):
+        if self._csm is None and self._sm is not None and self._bp_dir is not None:
+            self.calculate_cumulative_similarity_matrix(diag_offset=self._last_csm_diag_offset)
         if self._csm is None:
             return None
         return self._csm[2:, 2:]
@@ -49,28 +55,82 @@ class LoCo:
         self._sm  = similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
         return self._sm
           
-    def calculate_cumulative_similarity_matrix(self):
+    def calculate_cumulative_similarity_matrix(self, diag_offset=0, candidate_threshold=None, tile_size=0, diag_gap=0):
         if self._sm is None:
-            self.calculate_similarity_matrix()            
-        self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
+            self.calculate_similarity_matrix()
+        self._last_csm_diag_offset = np.int32(diag_offset)
+        threshold = np.float32(0.0 if candidate_threshold is None else candidate_threshold)
+        tile_size = np.int32(tile_size)
+        diag_gap = np.int32(diag_gap)
+        diag_offset = np.int32(diag_offset)
+        if self.warping:
+            self._csm, self._bp_dir, self._candidate_linear_pos = loco_jit.cumulative_similarity_matrix_warping_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        else:
+            self._csm, self._bp_dir, self._candidate_linear_pos = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        self._candidate_values = None
         return self._csm
+
+    def prepare_cumulative_similarity_for_path_search(self, diag_offset=0, candidate_threshold=None, tile_size=0, diag_gap=0):
+        if self._sm is None:
+            self.calculate_similarity_matrix()
+        self._last_csm_diag_offset = np.int32(diag_offset)
+        threshold = np.float32(0.0 if candidate_threshold is None else candidate_threshold)
+        tile_size = np.int32(tile_size)
+        diag_gap = np.int32(diag_gap)
+        diag_offset = np.int32(diag_offset)
+        self._csm = None
+        if self.warping:
+            self._bp_dir, self._candidate_linear_pos, self._candidate_values = loco_jit.cumulative_similarity_matrix_warping_with_bp_compact(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        else:
+            self._bp_dir, self._candidate_linear_pos, self._candidate_values = loco_jit.cumulative_similarity_matrix_no_warping_with_bp_compact(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        return self._bp_dir
 
     def find_best_paths(self, l_min=None, vwidth=None):
         if l_min is None:
             l_min = min(len(self.ts), len(self.ts2)) // 10
         if vwidth is None:
             vwidth = l_min // 2
+        l_min = np.int32(l_min)
+        vwidth = np.int32(vwidth)
 
         if self._csm is None:
-            self.calculate_cumulative_similarity_matrix()
+            diag_offset = np.int32(0)
+            if self._symmetric:
+                diag_offset = np.int32(-max(1, (int(vwidth) + 1) // 2))
+            min_path_length = l_min if not self.warping else np.int32(max(1, (int(l_min) + 1) // 2))
+            self.prepare_cumulative_similarity_for_path_search(
+                diag_offset=diag_offset,
+                candidate_threshold=self.tau * min_path_length,
+                tile_size=vwidth,
+                diag_gap=np.int32(vwidth + 1) if self._symmetric else np.int32(0),
+            )
 
-        # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
-        mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
-            # First, mask region around the diagional as if the diagonal is already found as a path.
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+            shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
+            if self._csm is None and self.warping:
+                mask = np.empty((0, 0), dtype=np.bool_)
+            else:
+                mask = loco_jit.symmetric_path_mask(shape[0], shape[1], vwidth)
+        else:
+            shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
+            mask = np.zeros(shape, dtype=np.bool_)
 
-        paths = find_best_paths(self._csm, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
+        if self._csm is not None:
+            paths = loco_jit.find_best_paths_with_bp(
+                self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._symmetric, self._candidate_linear_pos
+            )
+        else:
+            paths = loco_jit.find_best_paths_with_bp_compact(
+                mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos, self._candidate_values, self._symmetric, np.int32(vwidth + 1)
+            )
         paths = [path-2 for path in paths]
 
         if self._symmetric:
@@ -88,18 +148,14 @@ class LoCo:
         # Get the SM, determine tau and delta's
         sm = loco.calculate_similarity_matrix()
         tau = estimate_tau_from_sm(sm, rho, only_triu=loco._symmetric)
-        loco.tau = tau
-        loco.delta_a = 2 * tau
-        loco.delta_m = 0.5
+        loco.tau = np.float32(tau)
+        loco.delta_a = np.float32(2.0) * loco.tau
+        loco.delta_m = np.float32(0.5)
         return loco
     
 # Calculate the similarity threshold tau as the rho-quantile of the similarity matrix.
 def estimate_tau_from_sm(sm, rho, only_triu=False):
-    if only_triu:
-        tau = np.quantile(sm[np.triu_indices(len(sm))], rho, axis=None)
-    else:
-        tau = np.quantile(sm, rho, axis=None)
-    return tau
+    return loco_jit.exact_tau_from_sm(sm, rho, only_triu)
 
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     return loco_jit.similarity_matrix_ndim(ts1, ts2, gamma, only_triu, diag_offset)
@@ -141,5 +197,5 @@ def handle_gamma(ts, gamma, symmetric, equal_weight_dims):
     # Else, len(gamma) should be equal to the number of dimensions
     else:
         assert np.ndim(gamma) == 1 and len(gamma) == D
-    gamma = np.array(gamma, dtype=np.float64)
+    gamma = np.array(gamma, dtype=np.float32)
     return gamma
