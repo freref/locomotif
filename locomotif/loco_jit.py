@@ -86,6 +86,22 @@ def radix_argsort_uint64(keys):
         tmp_perm = swap_perm
 
     return perm
+
+@njit(cache=True)
+def _finalize_tiled_candidates(tile_best_linear):
+    count = 0
+    for idx in range(len(tile_best_linear)):
+        if tile_best_linear[idx] >= 0:
+            count += 1
+
+    out = np.empty(count, dtype=np.int64)
+    write_idx = 0
+    for idx in range(len(tile_best_linear)):
+        linear_idx = tile_best_linear[idx]
+        if linear_idx >= 0:
+            out[write_idx] = linear_idx
+            write_idx += 1
+    return out
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -111,11 +127,20 @@ def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, 
     return csm
 
 @njit(cache=True)
-def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, tile_size=0, candidate_threshold=0.0, diag_gap=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    if tile_size > 0:
+        n_tiles_i = (n + 2 + tile_size - 1) // tile_size
+        n_tiles_j = (m + 2 + tile_size - 1) // tile_size
+        tile_best_linear = np.full(n_tiles_i * n_tiles_j, np.int64(-1), dtype=np.int64)
+        tile_best_value = np.zeros(n_tiles_i * n_tiles_j, dtype=np.float32)
+    else:
+        n_tiles_j = 0
+        tile_best_linear = np.empty(0, dtype=np.int64)
+        tile_best_value = np.empty(0, dtype=np.float32)
 
     for i in range(n):
 
@@ -137,9 +162,16 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
                 csm[i + 2, j + 2] = max(0, sim + max_cs)
 
             if csm[i + 2, j + 2] > 0:
-                bp_dir[i + 2, j + 2] = direction
+                ci = i + 2
+                cj = j + 2
+                bp_dir[ci, cj] = direction
+                if tile_size > 0 and csm[ci, cj] >= candidate_threshold and (not only_triu or cj >= ci + diag_gap):
+                    tile_idx = (ci // tile_size) * n_tiles_j + (cj // tile_size)
+                    if tile_best_linear[tile_idx] == -1 or csm[ci, cj] > tile_best_value[tile_idx]:
+                        tile_best_linear[tile_idx] = np.int64(ci) * np.int64(m + 2) + np.int64(cj)
+                        tile_best_value[tile_idx] = csm[ci, cj]
 
-    return csm, bp_dir
+    return csm, bp_dir, _finalize_tiled_candidates(tile_best_linear)
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -164,11 +196,20 @@ def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.
     return csm
 
 @njit(cache=True)
-def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
+def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, tile_size=0, candidate_threshold=0.0, diag_gap=0):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    if tile_size > 0:
+        n_tiles_i = (n + 2 + tile_size - 1) // tile_size
+        n_tiles_j = (m + 2 + tile_size - 1) // tile_size
+        tile_best_linear = np.full(n_tiles_i * n_tiles_j, np.int64(-1), dtype=np.int64)
+        tile_best_value = np.zeros(n_tiles_i * n_tiles_j, dtype=np.float32)
+    else:
+        n_tiles_j = 0
+        tile_best_linear = np.empty(0, dtype=np.int64)
+        tile_best_value = np.empty(0, dtype=np.float32)
 
     for i in range(n):
 
@@ -185,9 +226,16 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
                 csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
 
             if csm[i + 2, j + 2] > 0:
-                bp_dir[i + 2, j + 2] = np.int8(0)
+                ci = i + 2
+                cj = j + 2
+                bp_dir[ci, cj] = np.int8(0)
+                if tile_size > 0 and csm[ci, cj] >= candidate_threshold and (not only_triu or cj >= ci + diag_gap):
+                    tile_idx = (ci // tile_size) * n_tiles_j + (cj // tile_size)
+                    if tile_best_linear[tile_idx] == -1 or csm[ci, cj] > tile_best_value[tile_idx]:
+                        tile_best_linear[tile_idx] = np.int64(ci) * np.int64(m + 2) + np.int64(cj)
+                        tile_best_value[tile_idx] = csm[ci, cj]
 
-    return csm, bp_dir
+    return csm, bp_dir, _finalize_tiled_candidates(tile_best_linear)
 
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
@@ -459,13 +507,16 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     return paths
 
 @njit(cache=True)
-def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
+def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None, candidate_linear_pos=None):
     mask = mask | (csm <= 0)
-    start_mask = (~mask)
     n, m = csm.shape
 
-    pos_i, pos_j = np.nonzero(start_mask)
-    linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
+    if candidate_linear_pos is not None and len(candidate_linear_pos) > 0:
+        linear_pos = candidate_linear_pos
+    else:
+        start_mask = (~mask)
+        pos_i, pos_j = np.nonzero(start_mask)
+        linear_pos = pos_i.astype(np.int64) * np.int64(m) + pos_j.astype(np.int64)
     csm_flat = csm.reshape(n * m)
     values = csm_flat[linear_pos]
     perm = radix_argsort_uint64(values.view(np.uint32).astype(np.uint64))
