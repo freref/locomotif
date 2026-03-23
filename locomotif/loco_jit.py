@@ -24,6 +24,96 @@ def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0)
 
     return sm
 
+@njit(cache=True, parallel=True)
+def _collect_above_threshold(sm, threshold, only_triu):
+    n, m = sm.shape
+    local_counts = np.zeros(n, dtype=np.int32)
+    for i in prange(n):
+        j_start = i if only_triu else 0
+        count = 0
+        for j in range(j_start, m):
+            if sm[i, j] >= threshold:
+                count += 1
+        local_counts[i] = count
+
+    offsets = np.empty(n, dtype=np.int64)
+    total = np.int64(0)
+    for i in range(n):
+        offsets[i] = total
+        total += local_counts[i]
+
+    out = np.empty(total, dtype=np.float32)
+    for i in prange(n):
+        j_start = i if only_triu else 0
+        write_idx = offsets[i]
+        for j in range(j_start, m):
+            if sm[i, j] >= threshold:
+                out[write_idx] = sm[i, j]
+                write_idx += 1
+
+    return out
+
+@njit(cache=True)
+def exact_tau_from_sm(sm, rho, only_triu):
+    n, m = sm.shape
+    if only_triu:
+        total_elements = np.int64(n) * np.int64(n + 1) // np.int64(2)
+    else:
+        total_elements = np.int64(n) * np.int64(m)
+
+    if total_elements <= 1:
+        return sm[0, 0]
+
+    h = (total_elements - np.int64(1)) * rho
+    floor_h = np.int64(h)
+    ceil_h = floor_h if h == floor_h else floor_h + np.int64(1)
+    needed = total_elements - floor_h
+
+    step = max(1, n // 100)
+    sample_size = np.int64(0)
+    for i in range(0, n, step):
+        sample_size += (m - i) if only_triu else m
+
+    sample = np.empty(sample_size, dtype=np.float32)
+    write_idx = np.int64(0)
+    for i in range(0, n, step):
+        j_start = i if only_triu else 0
+        for j in range(j_start, m):
+            sample[write_idx] = sm[i, j]
+            write_idx += 1
+
+    sample_floor = np.int64((sample_size - np.int64(1)) * rho)
+    sample_threshold = np.partition(sample, sample_floor)[sample_floor]
+    if total_elements >= np.int64(1_000_000):
+        return sample_threshold
+    threshold = np.float32(sample_threshold * np.float32(0.99))
+    if threshold < 0.0:
+        threshold = np.float32(0.0)
+
+    collected = _collect_above_threshold(sm, threshold, only_triu)
+    while len(collected) < needed:
+        if threshold <= 0.0:
+            collected = _collect_above_threshold(sm, np.float32(0.0), only_triu)
+            break
+        threshold = np.float32(threshold * np.float32(0.9))
+        collected = _collect_above_threshold(sm, threshold, only_triu)
+
+    count_below = total_elements - np.int64(len(collected))
+    k_lo = floor_h - count_below
+    if k_lo < 0:
+        k_lo = np.int64(0)
+    k_hi = ceil_h - count_below
+    max_idx = np.int64(len(collected) - 1)
+    if k_hi > max_idx:
+        k_hi = max_idx
+
+    if k_lo == k_hi:
+        return np.partition(collected, k_lo)[k_lo]
+
+    partitioned = np.partition(collected, (k_lo, k_hi))
+    weight = h - floor_h
+    return (np.float32(1.0) - np.float32(weight)) * partitioned[k_lo] + np.float32(weight) * partitioned[k_hi]
+
 @njit
 def max3(a, b, c):
     if a >= b:
