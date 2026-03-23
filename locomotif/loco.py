@@ -148,11 +148,7 @@ class LoCo:
     
 # Calculate the similarity threshold tau as the rho-quantile of the similarity matrix.
 def estimate_tau_from_sm(sm, rho, only_triu=False):
-    if only_triu:
-        tau = np.quantile(sm[np.triu_indices(len(sm))], rho, axis=None)
-    else:
-        tau = np.quantile(sm, rho, axis=None)
-    return tau
+    return loco_jit.exact_tau_from_sm(sm, rho, only_triu)
 
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     return loco_jit.similarity_matrix_ndim(ts1, ts2, gamma, only_triu, diag_offset)
