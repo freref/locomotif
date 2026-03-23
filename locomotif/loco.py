@@ -29,6 +29,8 @@ class LoCo:
         self._csm = None
         self._bp_dir = None
         self._candidate_linear_pos = None
+        self._candidate_values = None
+        self._last_csm_diag_offset = 0
         # Local warping paths
         self._paths = None
 
@@ -39,6 +41,8 @@ class LoCo:
 
     @property
     def cumulative_similarity_matrix(self):
+        if self._csm is None and self._sm is not None and self._bp_dir is not None:
+            self.calculate_cumulative_similarity_matrix(diag_offset=self._last_csm_diag_offset)
         if self._csm is None:
             return None
         return self._csm[2:, 2:]
@@ -51,19 +55,37 @@ class LoCo:
         self._sm  = similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
         return self._sm
           
-    def calculate_cumulative_similarity_matrix(self, candidate_threshold=None, tile_size=0, diag_gap=0):
+    def calculate_cumulative_similarity_matrix(self, diag_offset=0, candidate_threshold=None, tile_size=0, diag_gap=0):
         if self._sm is None:
             self.calculate_similarity_matrix()
+        self._last_csm_diag_offset = diag_offset
         threshold = 0.0 if candidate_threshold is None else candidate_threshold
         if self.warping:
             self._csm, self._bp_dir, self._candidate_linear_pos = loco_jit.cumulative_similarity_matrix_warping_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0, tile_size, threshold, diag_gap
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
             )
         else:
             self._csm, self._bp_dir, self._candidate_linear_pos = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0, tile_size, threshold, diag_gap
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
             )
+        self._candidate_values = None
         return self._csm
+
+    def prepare_cumulative_similarity_for_path_search(self, diag_offset=0, candidate_threshold=None, tile_size=0, diag_gap=0):
+        if self._sm is None:
+            self.calculate_similarity_matrix()
+        self._last_csm_diag_offset = diag_offset
+        threshold = 0.0 if candidate_threshold is None else candidate_threshold
+        self._csm = None
+        if self.warping:
+            self._bp_dir, self._candidate_linear_pos, self._candidate_values = loco_jit.cumulative_similarity_matrix_warping_with_bp_compact(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        else:
+            self._bp_dir, self._candidate_linear_pos, self._candidate_values = loco_jit.cumulative_similarity_matrix_no_warping_with_bp_compact(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, tile_size, threshold, diag_gap
+            )
+        return self._bp_dir
 
     def find_best_paths(self, l_min=None, vwidth=None):
         if l_min is None:
@@ -72,20 +94,36 @@ class LoCo:
             vwidth = l_min // 2
 
         if self._csm is None:
+            diag_offset = 0
+            if self._symmetric:
+                diag_offset = -max(1, (vwidth + 1) // 2)
             min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
-            self.calculate_cumulative_similarity_matrix(
+            self.prepare_cumulative_similarity_for_path_search(
+                diag_offset=diag_offset,
                 candidate_threshold=self.tau * min_path_length,
                 tile_size=vwidth,
                 diag_gap=vwidth + 1 if self._symmetric else 0,
             )
 
-        mask = np.full(self._csm.shape, self._symmetric)
         if self._symmetric:
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+            shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
+            if self._csm is None and self.warping:
+                mask = np.empty((0, 0), dtype=np.bool_)
+            else:
+                mask = np.full(shape, True)
+                mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+        else:
+            shape = self._csm.shape if self._csm is not None else self._bp_dir.shape
+            mask = np.zeros(shape, dtype=np.bool_)
 
-        paths = loco_jit.find_best_paths_with_bp(
-            self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos
-        )
+        if self._csm is not None:
+            paths = loco_jit.find_best_paths_with_bp(
+                self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos
+            )
+        else:
+            paths = loco_jit.find_best_paths_with_bp_compact(
+                mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_linear_pos, self._candidate_values, self._symmetric, vwidth + 1
+            )
         paths = [path-2 for path in paths]
 
         if self._symmetric:
