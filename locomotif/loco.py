@@ -190,5 +190,5 @@ def handle_gamma(ts, gamma, symmetric, equal_weight_dims):
     # Else, len(gamma) should be equal to the number of dimensions
     else:
         assert np.ndim(gamma) == 1 and len(gamma) == D
-    gamma = np.array(gamma, dtype=np.float64)
+    gamma = np.array(gamma, dtype=np.float32)
     return gamma
