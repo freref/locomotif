@@ -28,6 +28,7 @@ class LoCo:
         # Cumulative similiarity matrix
         self._csm = None
         self._bp_dir = None
+        self._candidate_pos = None
         # Local warping paths
         self._paths = None
 
@@ -50,16 +51,17 @@ class LoCo:
         self._sm  = similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma, only_triu=self._symmetric, diag_offset=0)
         return self._sm
           
-    def calculate_cumulative_similarity_matrix(self):
+    def calculate_cumulative_similarity_matrix(self, candidate_threshold=None, tile_size=0, diag_gap=0):
         if self._sm is None:
             self.calculate_similarity_matrix()
+        threshold = 0.0 if candidate_threshold is None else candidate_threshold
         if self.warping:
-            self._csm, self._bp_dir = loco_jit.cumulative_similarity_matrix_warping_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
+            self._csm, self._bp_dir, self._candidate_pos = loco_jit.cumulative_similarity_matrix_warping_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0, tile_size, threshold, diag_gap
             )
         else:
-            self._csm, self._bp_dir = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
+            self._csm, self._bp_dir, self._candidate_pos = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0, tile_size, threshold, diag_gap
             )
         return self._csm
 
@@ -70,7 +72,12 @@ class LoCo:
             vwidth = l_min // 2
 
         if self._csm is None:
-            self.calculate_cumulative_similarity_matrix()
+            min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
+            self.calculate_cumulative_similarity_matrix(
+                candidate_threshold=self.tau * min_path_length,
+                tile_size=vwidth,
+                diag_gap=vwidth + 1 if self._symmetric else 0,
+            )
 
         # When symmetric, the diagonal is hardcoded (TODO: can be removed as step_sizes is not configurable anymore)
         mask = np.full(self._csm.shape, self._symmetric)
@@ -78,7 +85,9 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        paths = loco_jit.find_best_paths_with_bp(self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir)
+        paths = loco_jit.find_best_paths_with_bp(
+            self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir, self._candidate_pos
+        )
         paths = [path-2 for path in paths]
 
         if self._symmetric:
