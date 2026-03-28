@@ -86,6 +86,35 @@ def radix_argsort_uint64(keys):
         tmp_perm = swap_perm
 
     return perm
+
+@njit(cache=True, parallel=True)
+def _best_start_pos(csm, mask):
+    n, m = csm.shape
+    row_best_j = np.full(n, np.int32(-1), dtype=np.int32)
+    row_best_value = np.full(n, np.float32(-np.inf), dtype=np.float32)
+
+    for i in prange(n):
+        best_j = np.int32(-1)
+        best_value = np.float32(-np.inf)
+        for j in range(m):
+            value = csm[i, j]
+            if not mask[i, j] and value > best_value:
+                best_value = value
+                best_j = np.int32(j)
+        row_best_j[i] = best_j
+        row_best_value[i] = best_value
+
+    best_i = np.int32(-1)
+    best_j = np.int32(-1)
+    best_value = np.float32(-np.inf)
+    for i in range(n):
+        value = row_best_value[i]
+        if row_best_j[i] >= 0 and value > best_value:
+            best_i = np.int32(i)
+            best_j = row_best_j[i]
+            best_value = value
+
+    return best_i, best_j
         
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -434,3 +463,21 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
         paths.append(path)
 
     return paths
+
+@njit(cache=True)
+def find_best_pair_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
+    mask = mask | (csm <= 0)
+    while True:
+        i_best, j_best = _best_start_pos(csm, mask)
+        if i_best < 2 or j_best < 2:
+            return np.empty((0, 2), dtype=np.int32)
+
+        if warping:
+            path = _build_path_warping(bp_dir, mask, i_best, j_best)
+        else:
+            path = _build_path_no_warping(mask, i_best, j_best)
+
+        mask = mask_vicinity(path, mask, 0)
+
+        if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+            return path

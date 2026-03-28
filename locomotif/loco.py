@@ -89,6 +89,27 @@ class LoCo:
         self._paths = paths
         return self._paths
 
+    def find_best_pair(self, l_min=None, vwidth=None):
+        if l_min is None:
+            l_min = min(len(self.ts), len(self.ts2)) // 10
+        if vwidth is None:
+            vwidth = l_min // 2
+
+        if self._csm is None:
+            self.calculate_cumulative_similarity_matrix()
+
+        mask = np.full(self._csm.shape, self._symmetric)
+        if self._symmetric:
+            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+
+        path = loco_jit.find_best_pair_with_bp(self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir)
+        if len(path) == 0:
+            return None
+
+        path = path - 2
+        pair = ((int(path[0, 0]), int(path[-1, 0] + 1)), (int(path[0, 1]), int(path[-1, 1] + 1)))
+        return tuple(sorted(pair))
+
     @classmethod
     def instance_from_rho(cls, ts, rho, gamma=None, warping=True, ts2=None, equal_weight_dims=False):
         # Make LoCo instance
@@ -121,6 +142,9 @@ def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping)
     return paths
+
+def find_best_pair(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
+    return loco_jit.find_best_pair_with_bp(csm, mask, tau, l_min, vwidth, warping, bp_dir)
 
 def ensure_multivariate(ts):
     ts = np.asarray(ts)
