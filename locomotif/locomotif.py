@@ -33,6 +33,10 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
         motif_sets.append((representative, motif_set))
     return motif_sets
 
+def apply_locomotif_pair(ts, l_min, l_max, rho=None, warping=True):
+    lcm = get_locomotif_instance(ts, l_min, l_max, rho=rho, warping=warping)
+    return lcm.find_best_pair(vwidth=l_min // 2)
+
 def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
     return LoCoMotif.instance_from_rho(ts, l_min=l_min, l_max=l_max, rho=rho, warping=warping)
 
@@ -79,6 +83,10 @@ class LoCoMotif:
             self._paths.append(Path(path_mirrored, path_similarities))
 
         return self._paths
+
+    def find_best_pair(self, vwidth=None):
+        vwidth = np.maximum(10, self.l_min // 2) if vwidth is None else vwidth
+        return self._loco.find_best_pair(self.l_min, vwidth)
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
