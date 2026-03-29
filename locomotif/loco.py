@@ -27,6 +27,8 @@ class LoCo:
         self._sm = None
         # Cumulative similiarity matrix
         self._csm = None
+        self._span_i = None
+        self._span_j = None
         # Local warping paths
         self._paths = None
 
@@ -51,8 +53,15 @@ class LoCo:
           
     def calculate_cumulative_similarity_matrix(self):
         if self._sm is None:
-            self.calculate_similarity_matrix()            
-        self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
+            self.calculate_similarity_matrix()
+        if self.warping:
+            self._csm, self._span_i, self._span_j = loco_jit.cumulative_similarity_matrix_warping_with_spans(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
+            )
+        else:
+            self._csm, self._span_i, self._span_j = loco_jit.cumulative_similarity_matrix_no_warping_with_spans(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
+            )
         return self._csm
 
     def find_best_paths(self, l_min=None, vwidth=None):
@@ -94,7 +103,8 @@ class LoCo:
         if self._symmetric:
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        path = loco_jit.find_best_pair(self._csm, mask, self.tau, l_min, vwidth, self.warping)
+        min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
+        path = loco_jit.find_best_pair(self._csm, self._span_i, self._span_j, mask, min_path_length, self.warping)
         if len(path) == 0:
             return None
 
