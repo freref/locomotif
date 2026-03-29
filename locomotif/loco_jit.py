@@ -145,6 +145,8 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    span_i = np.zeros((n + 2, m + 2), dtype=np.int32)
+    span_j = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -167,8 +169,21 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
 
             if csm[i + 2, j + 2] > 0:
                 bp_dir[i + 2, j + 2] = direction
+                if max_cs > 0:
+                    if direction == 0:
+                        span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 1 + 2] + 1
+                        span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 1 + 2] + 1
+                    elif direction == 1:
+                        span_i[i + 2, j + 2] = span_i[i - 2 + 2, j - 1 + 2] + 2
+                        span_j[i + 2, j + 2] = span_j[i - 2 + 2, j - 1 + 2] + 1
+                    else:
+                        span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 2 + 2] + 1
+                        span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 2 + 2] + 2
+                else:
+                    span_i[i + 2, j + 2] = 1
+                    span_j[i + 2, j + 2] = 1
 
-    return csm, bp_dir
+    return csm, bp_dir, span_i, span_j
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -198,6 +213,8 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
     bp_dir = np.full((n + 2, m + 2), np.int8(-1), dtype=np.int8)
+    span_i = np.zeros((n + 2, m + 2), dtype=np.int32)
+    span_j = np.zeros((n + 2, m + 2), dtype=np.int32)
 
     for i in range(n):
 
@@ -215,8 +232,14 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
 
             if csm[i + 2, j + 2] > 0:
                 bp_dir[i + 2, j + 2] = np.int8(0)
+                if csm[i - 1 + 2, j - 1 + 2] > 0:
+                    span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 1 + 2] + 1
+                    span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 1 + 2] + 1
+                else:
+                    span_i[i + 2, j + 2] = 1
+                    span_j[i + 2, j + 2] = 1
 
-    return csm, bp_dir
+    return csm, bp_dir, span_i, span_j
 
 
 @njit(Array(int32, 2, 'C')(float32[:, :], boolean[:, :], int32, int32))
@@ -465,8 +488,9 @@ def find_best_paths_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp
     return paths
 
 @njit(cache=True)
-def find_best_pair_with_bp(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
-    mask = mask | (csm <= 0)
+def find_best_pair_with_bp(csm, span_i, span_j, mask, l_min=10, warping=True, bp_dir=None):
+    mask = mask | (csm <= 0) | ((span_i < l_min) & (span_j < l_min))
+
     while True:
         i_best, j_best = _best_start_pos(csm, mask)
         if i_best < 2 or j_best < 2:
