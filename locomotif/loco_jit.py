@@ -108,6 +108,51 @@ def cumulative_similarity_matrix_warping_with_spans(sm, tau=0.5, delta_a=1.0, de
                     span_j[i + 2, j + 2] = 1
     return csm, span_i, span_j
 
+@njit(cache=True)
+def cumulative_similarity_matrix_warping_for_pair(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10):
+    n, m = sm.shape
+
+    csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    endpoint_csm = np.full((n + 2, m + 2), -np.inf, dtype=np.float32)
+    span_i = np.zeros((n + 2, m + 2), dtype=np.int32)
+    span_j = np.zeros((n + 2, m + 2), dtype=np.int32)
+
+    for i in range(n):
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        j_end = m
+
+        for j in range(j_start, j_end):
+            sim = sm[i, j]
+            max_cs = max3(csm[i - 1 + 2, j - 1 + 2], csm[i - 2 + 2, j - 1 + 2], csm[i - 1 + 2, j - 2 + 2])
+
+            if sim < tau:
+                csm[i + 2, j + 2] = max(0, delta_m * max_cs - delta_a)
+            else:
+                csm[i + 2, j + 2] = max(0, sim + max_cs)
+
+            if csm[i + 2, j + 2] > 0:
+                if max_cs > 0:
+                    pred_diag = csm[i - 1 + 2, j - 1 + 2]
+                    pred_i = csm[i - 2 + 2, j - 1 + 2]
+                    pred_j = csm[i - 1 + 2, j - 2 + 2]
+                    if pred_diag >= pred_i and pred_diag >= pred_j:
+                        span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 1 + 2] + 1
+                        span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 1 + 2] + 1
+                    elif pred_i >= pred_j:
+                        span_i[i + 2, j + 2] = span_i[i - 2 + 2, j - 1 + 2] + 2
+                        span_j[i + 2, j + 2] = span_j[i - 2 + 2, j - 1 + 2] + 1
+                    else:
+                        span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 2 + 2] + 1
+                        span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 2 + 2] + 2
+                else:
+                    span_i[i + 2, j + 2] = 1
+                    span_j[i + 2, j + 2] = 1
+
+                if span_i[i + 2, j + 2] >= l_min or span_j[i + 2, j + 2] >= l_min:
+                    endpoint_csm[i + 2, j + 2] = csm[i + 2, j + 2]
+
+    return csm, endpoint_csm
+
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
     csm, _, _ = cumulative_similarity_matrix_warping_with_spans(sm, tau, delta_a, delta_m, only_triu, diag_offset)
@@ -144,6 +189,40 @@ def cumulative_similarity_matrix_no_warping_with_spans(sm, tau=0.5, delta_a=1.0,
                     span_j[i + 2, j + 2] = 1
 
     return csm, span_i, span_j
+
+@njit(cache=True)
+def cumulative_similarity_matrix_no_warping_for_pair(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10):
+    n, m = sm.shape
+
+    csm = np.zeros((n + 2, m + 2), dtype=np.float32)
+    endpoint_csm = np.full((n + 2, m + 2), -np.inf, dtype=np.float32)
+    span_i = np.zeros((n + 2, m + 2), dtype=np.int32)
+    span_j = np.zeros((n + 2, m + 2), dtype=np.int32)
+
+    for i in range(n):
+        j_start = max(0, i - diag_offset) if only_triu else 0
+        j_end = m
+
+        for j in range(j_start, j_end):
+            sim = sm[i, j]
+
+            if sim < tau:
+                csm[i + 2, j + 2] = max(0, delta_m * csm[i - 1 + 2, j - 1 + 2] - delta_a)
+            else:
+                csm[i + 2, j + 2] = max(0, sim + csm[i - 1 + 2, j - 1 + 2])
+
+            if csm[i + 2, j + 2] > 0:
+                if csm[i - 1 + 2, j - 1 + 2] > 0:
+                    span_i[i + 2, j + 2] = span_i[i - 1 + 2, j - 1 + 2] + 1
+                    span_j[i + 2, j + 2] = span_j[i - 1 + 2, j - 1 + 2] + 1
+                else:
+                    span_i[i + 2, j + 2] = 1
+                    span_j[i + 2, j + 2] = 1
+
+                if span_i[i + 2, j + 2] >= l_min or span_j[i + 2, j + 2] >= l_min:
+                    endpoint_csm[i + 2, j + 2] = csm[i + 2, j + 2]
+
+    return csm, endpoint_csm
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, boolean, int32))
 def cumulative_similarity_matrix_no_warping(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0):
@@ -282,21 +361,14 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
 
     return paths
 
-@njit(Array(int32, 2, 'C')(float32[:, :], int32[:, :], int32[:, :], boolean[:, :], int32, boolean))
-def find_best_pair(csm, span_i, span_j, mask, l_min=10, warping=True):
-    mask = mask | (csm <= 0) | ((span_i < l_min) & (span_j < l_min))
+@njit(Array(int32, 2, 'C')(float32[:, :], float32[:, :], boolean[:, :], boolean))
+def find_best_pair(csm, endpoint_csm, mask, warping=True):
+    mask = mask | (csm <= 0)
 
-    while True:
-        i_best, j_best = _best_start_pos(csm, mask)
-        if i_best < 2 or j_best < 2:
-            return np.empty((0, 2), dtype=np.int32)
+    i_best, j_best = _best_start_pos(endpoint_csm, mask)
+    if i_best < 2 or j_best < 2:
+        return np.empty((0, 2), dtype=np.int32)
 
-        if warping:
-            path = best_path_warping(csm, mask, i_best, j_best)
-        else:
-            path = best_path_no_warping(csm, mask, i_best, j_best)
-
-        mask = mask_vicinity(path, mask, 0)
-
-        if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-            return path
+    if warping:
+        return best_path_warping(csm, mask, i_best, j_best)
+    return best_path_no_warping(csm, mask, i_best, j_best)
