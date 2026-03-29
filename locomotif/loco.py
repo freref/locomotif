@@ -97,15 +97,22 @@ class LoCo:
         if vwidth is None:
             vwidth = l_min // 2
 
-        if self._csm is None:
-            self.calculate_cumulative_similarity_matrix()
-
-        mask = np.full(self._csm.shape, self._symmetric)
-        if self._symmetric:
-            mask[np.triu_indices(len(mask), k=vwidth+1)] = False
+        if self._sm is None:
+            self.calculate_similarity_matrix()
 
         min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
-        path = loco_jit.find_best_pair_with_bp(self._csm, self._span_i, self._span_j, mask, min_path_length, self.warping, self._bp_dir)
+        diag_offset = -(vwidth + 1) if self._symmetric else 0
+        if self.warping:
+            csm, endpoint_csm, bp_dir = loco_jit.cumulative_similarity_matrix_warping_for_pair_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, min_path_length
+            )
+        else:
+            csm, endpoint_csm, bp_dir = loco_jit.cumulative_similarity_matrix_no_warping_for_pair_with_bp(
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, min_path_length
+            )
+
+        mask = np.full(csm.shape, False)
+        path = loco_jit.find_best_pair_with_bp(csm, endpoint_csm, mask, self.warping, bp_dir)
         if len(path) == 0:
             return None
 
