@@ -28,6 +28,8 @@ class LoCo:
         # Cumulative similiarity matrix
         self._csm = None
         self._bp_dir = None
+        self._span_i = None
+        self._span_j = None
         # Local warping paths
         self._paths = None
 
@@ -54,11 +56,11 @@ class LoCo:
         if self._sm is None:
             self.calculate_similarity_matrix()
         if self.warping:
-            self._csm, self._bp_dir = loco_jit.cumulative_similarity_matrix_warping_with_bp(
+            self._csm, self._bp_dir, self._span_i, self._span_j = loco_jit.cumulative_similarity_matrix_warping_with_bp(
                 self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
             )
         else:
-            self._csm, self._bp_dir = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
+            self._csm, self._bp_dir, self._span_i, self._span_j = loco_jit.cumulative_similarity_matrix_no_warping_with_bp(
                 self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, 0
             )
         return self._csm
@@ -78,7 +80,9 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        paths = loco_jit.find_best_paths_with_bp(self._csm, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir)
+        paths = loco_jit.find_best_paths_with_bp(
+            self._csm, self._span_i, self._span_j, mask, self.tau, l_min, vwidth, self.warping, self._bp_dir
+        )
         paths = [path-2 for path in paths]
 
         if self._symmetric:
