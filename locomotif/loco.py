@@ -91,24 +91,25 @@ class LoCo:
         self._paths = paths
         return self._paths
 
-    def find_best_pair(self, l_min=None, vwidth=None):
+    def find_best_pair(self, l_min=None, l_max=None, vwidth=None):
         if l_min is None:
             l_min = min(len(self.ts), len(self.ts2)) // 10
+        if l_max is None:
+            l_max = max(len(self.ts), len(self.ts2))
         if vwidth is None:
             vwidth = l_min // 2
 
         if self._sm is None:
             self.calculate_similarity_matrix()
 
-        min_path_length = l_min if not self.warping else max(1, (l_min + 1) // 2)
         diag_offset = -(vwidth + 1) if self._symmetric else 0
         if self.warping:
             csm, endpoint_csm, bp_dir = loco_jit.cumulative_similarity_matrix_warping_for_pair_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, min_path_length
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, l_min, l_max
             )
         else:
             csm, endpoint_csm, bp_dir = loco_jit.cumulative_similarity_matrix_no_warping_for_pair_with_bp(
-                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, min_path_length
+                self._sm, self.tau, self.delta_a, self.delta_m, self._symmetric, diag_offset, l_min, l_max
             )
 
         mask = np.full(csm.shape, False)

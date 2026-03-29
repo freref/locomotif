@@ -274,7 +274,7 @@ def cumulative_similarity_matrix_warping_with_bp(sm, tau=0.5, delta_a=1.0, delta
     return csm, bp_dir, span_i, span_j
 
 @njit(cache=True)
-def cumulative_similarity_matrix_warping_for_pair_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10):
+def cumulative_similarity_matrix_warping_for_pair_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10, l_max=10):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
@@ -316,7 +316,7 @@ def cumulative_similarity_matrix_warping_for_pair_with_bp(sm, tau=0.5, delta_a=1
                     span_i[i + 2, j + 2] = 1
                     span_j[i + 2, j + 2] = 1
 
-                if span_i[i + 2, j + 2] >= l_min or span_j[i + 2, j + 2] >= l_min:
+                if l_min <= span_i[i + 2, j + 2] <= l_max and l_min <= span_j[i + 2, j + 2] <= l_max:
                     endpoint_csm[i + 2, j + 2] = csm[i + 2, j + 2]
 
     return csm, endpoint_csm, bp_dir
@@ -378,7 +378,7 @@ def cumulative_similarity_matrix_no_warping_with_bp(sm, tau=0.5, delta_a=1.0, de
     return csm, bp_dir, span_i, span_j
 
 @njit(cache=True)
-def cumulative_similarity_matrix_no_warping_for_pair_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10):
+def cumulative_similarity_matrix_no_warping_for_pair_with_bp(sm, tau=0.5, delta_a=1.0, delta_m=0.5, only_triu=False, diag_offset=0, l_min=10, l_max=10):
     n, m = sm.shape
 
     csm = np.zeros((n + 2, m + 2), dtype=np.float32)
@@ -408,7 +408,7 @@ def cumulative_similarity_matrix_no_warping_for_pair_with_bp(sm, tau=0.5, delta_
                     span_i[i + 2, j + 2] = 1
                     span_j[i + 2, j + 2] = 1
 
-                if span_i[i + 2, j + 2] >= l_min or span_j[i + 2, j + 2] >= l_min:
+                if l_min <= span_i[i + 2, j + 2] <= l_max and l_min <= span_j[i + 2, j + 2] <= l_max:
                     endpoint_csm[i + 2, j + 2] = csm[i + 2, j + 2]
 
     return csm, endpoint_csm, bp_dir

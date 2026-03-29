@@ -86,7 +86,7 @@ class LoCoMotif:
 
     def find_best_pair(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2) if vwidth is None else vwidth
-        return self._loco.find_best_pair(self.l_min, vwidth)
+        return self._loco.find_best_pair(self.l_min, self.l_max, vwidth)
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
