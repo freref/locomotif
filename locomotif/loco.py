@@ -153,8 +153,8 @@ def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping)
     return paths
 
-def find_best_pair(csm, mask, tau, l_min=10, vwidth=5, warping=True, bp_dir=None):
-    return loco_jit.find_best_pair_with_bp(csm, mask, tau, l_min, vwidth, warping, bp_dir)
+def find_best_pair(csm, endpoint_csm, mask, warping=True, bp_dir=None):
+    return loco_jit.find_best_pair_with_bp(csm, endpoint_csm, mask, warping, bp_dir)
 
 def ensure_multivariate(ts):
     ts = np.asarray(ts)
